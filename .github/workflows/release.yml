@@ -20,7 +20,7 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             ext: tar.gz
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             ext: tar.gz
           - os: macos-latest
@@ -31,19 +31,21 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --release --locked
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Package (unix)
         if: matrix.ext == 'tar.gz'
         shell: bash
-        run: tar czf ci-${{ matrix.target }}.tar.gz -C target/release ci
+        run: tar czf ci-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release ci
 
       - name: Package (windows)
         if: matrix.ext == 'zip'
         shell: pwsh
-        run: Compress-Archive -Path target/release/ci.exe -DestinationPath ci-${{ matrix.target }}.zip
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/ci.exe -DestinationPath ci-${{ matrix.target }}.zip
 
       - uses: actions/upload-artifact@v4
         with:
