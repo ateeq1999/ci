@@ -26,9 +26,12 @@
 {%- elif db_orm == "typeorm" %}
     "pg": "^8.11.0",
     "typeorm": "^0.3.20",
-{%- else %}
+{%- elif db_driver == "postgres-js" %}
     "drizzle-orm": "^0.31.0",
     "postgres": "^3.4.4",
+{%- else %}
+    "drizzle-orm": "^0.31.0",
+    "pg": "^8.11.0",
 {%- endif %}
     "reflect-metadata": "^0.2.0",
     "rxjs": "^7.8.0",
@@ -37,6 +40,8 @@
   "devDependencies": {
     "@nestjs/cli": "^10.0.0",
 {%- if db_orm == "typeorm" %}
+    "@types/pg": "^8.11.0",
+{%- elif db_orm == "drizzle" and db_driver == "pg" %}
     "@types/pg": "^8.11.0",
 {%- endif %}
     "@types/express": "^4.17.0",

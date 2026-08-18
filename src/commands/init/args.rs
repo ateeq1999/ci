@@ -15,6 +15,11 @@ pub struct Args {
     #[serde(default)]
     pub orm: DbOrm,
 
+    /// Postgres driver Drizzle uses (ignored for other ORMs)
+    #[arg(long, value_enum, default_value = "pg")]
+    #[serde(default)]
+    pub driver: DrizzleDriver,
+
     /// Write files without running the package manager install
     #[arg(long)]
     #[serde(default)]
@@ -60,6 +65,23 @@ impl DbOrm {
             DbOrm::Drizzle => "drizzle",
             DbOrm::Typeorm => "typeorm",
             DbOrm::Prisma => "prisma",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DrizzleDriver {
+    #[default]
+    Pg,
+    PostgresJs,
+}
+
+impl DrizzleDriver {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DrizzleDriver::Pg => "pg",
+            DrizzleDriver::PostgresJs => "postgres-js",
         }
     }
 }

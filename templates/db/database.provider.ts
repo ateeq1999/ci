@@ -1,19 +1,19 @@
 import type { Provider } from "@nestjs/common";
 {%- if db_orm == "prisma" %}
-import { DATABASE_TOKEN } from "./database-type";
+import { PRISMA } from "./database.constants";
 import { PrismaClient } from "@prisma/client";
 
 export const databaseProvider: Provider = {
-  provide: DATABASE_TOKEN,
+  provide: PRISMA,
   useFactory: () => new PrismaClient(),
 };
 {%- elif db_orm == "typeorm" %}
-import { DATABASE_TOKEN } from "./database-type";
+import { TYPEORM } from "./database.constants";
 import { ConfigService } from "@nestjs/config";
 import { DataSource } from "typeorm";
 
 export const databaseProvider: Provider = {
-  provide: DATABASE_TOKEN,
+  provide: TYPEORM,
   inject: [ConfigService],
   useFactory: (config: ConfigService) => {
     const dataSource = new DataSource({
@@ -25,15 +25,26 @@ export const databaseProvider: Provider = {
     return dataSource.initialize();
   },
 };
-{%- else %}
+{%- elif db_driver == "postgres-js" %}
 import { drizzle } from "drizzle-orm/postgres-js";
 import * as schema from "./schema";
-import { DATABASE_TOKEN, POSTGRES_CLIENT_TOKEN } from "./database-type";
+import { DRIZZLE, POSTGRES_CLIENT } from "./database.constants";
 import type { PostgresClient } from "./postgres-client.provider";
 
 export const databaseProvider: Provider = {
-  provide: DATABASE_TOKEN,
-  inject: [POSTGRES_CLIENT_TOKEN],
+  provide: DRIZZLE,
+  inject: [POSTGRES_CLIENT],
   useFactory: (postgresClient: PostgresClient) => drizzle(postgresClient.sql, { schema }),
+};
+{%- else %}
+import { drizzle } from "drizzle-orm/node-postgres";
+import * as schema from "./schema";
+import { DRIZZLE, POSTGRES_CLIENT } from "./database.constants";
+import type { PostgresClient } from "./postgres-client.provider";
+
+export const databaseProvider: Provider = {
+  provide: DRIZZLE,
+  inject: [POSTGRES_CLIENT],
+  useFactory: (postgresClient: PostgresClient) => drizzle(postgresClient.pool, { schema }),
 };
 {%- endif %}

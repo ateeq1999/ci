@@ -4,7 +4,7 @@ use anyhow::Result;
 use atom_engine::Atom;
 use serde_json::json;
 
-use super::args::DbOrm;
+use super::args::{DbOrm, DrizzleDriver};
 use super::config;
 
 /// (relative path, template contents) pairs for the minimal NestJS starter.
@@ -60,8 +60,12 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../../../templates/init/src/config/env.validation.ts"),
     ),
     (
-        "src/database/database-type.ts",
-        include_str!("../../../templates/db/database-type.ts"),
+        "src/database/database.types.ts",
+        include_str!("../../../templates/db/database.types.ts"),
+    ),
+    (
+        "src/database/database.constants.ts",
+        include_str!("../../../templates/db/database.constants.ts"),
     ),
     (
         "src/database/database.provider.ts",
@@ -102,7 +106,11 @@ const PRISMA_FILES: &[(&str, &str)] = &[(
 /// Returns the starter project's files with substitution placeholders
 /// (`{{project_name}}`, `{{package_version}}`, ...) filled in, plus a
 /// `DatabaseModule` wired up for `db_orm`.
-pub fn starter_files(project_name: &str, db_orm: DbOrm) -> Result<Vec<(PathBuf, String)>> {
+pub fn starter_files(
+    project_name: &str,
+    db_orm: DbOrm,
+    db_driver: DrizzleDriver,
+) -> Result<Vec<(PathBuf, String)>> {
     let mut engine = Atom::new();
     let ctx = json!({
         "project_name": project_name,
@@ -110,6 +118,7 @@ pub fn starter_files(project_name: &str, db_orm: DbOrm) -> Result<Vec<(PathBuf, 
         "node_engine_range": config::NODE_ENGINE_RANGE,
         "nest_cli_schema_url": config::NEST_CLI_SCHEMA_URL,
         "db_orm": db_orm.as_str(),
+        "db_driver": db_driver.as_str(),
     });
 
     let orm_files: &[(&str, &str)] = match db_orm {

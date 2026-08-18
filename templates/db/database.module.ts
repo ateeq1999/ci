@@ -1,7 +1,11 @@
 import { Global, Module } from "@nestjs/common";
 import { databaseProvider } from "./database.provider";
-import { DATABASE_TOKEN } from "./database-type";
-{%- if db_orm == "drizzle" %}
+{%- if db_orm == "prisma" %}
+import { PRISMA } from "./database.constants";
+{%- elif db_orm == "typeorm" %}
+import { TYPEORM } from "./database.constants";
+{%- else %}
+import { DRIZZLE } from "./database.constants";
 import { postgresClientProvider } from "./postgres-client.provider";
 {%- endif %}
 
@@ -13,6 +17,6 @@ import { postgresClientProvider } from "./postgres-client.provider";
 {%- endif %}
     databaseProvider,
   ],
-  exports: [DATABASE_TOKEN],
+  exports: [{% if db_orm == "prisma" %}PRISMA{% elif db_orm == "typeorm" %}TYPEORM{% else %}DRIZZLE{% endif %}],
 })
 export class DatabaseModule {}

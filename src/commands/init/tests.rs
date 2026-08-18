@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::args::{DbOrm, PackageManager};
+use super::args::{DbOrm, DrizzleDriver, PackageManager};
 use super::*;
 use crate::context::NoopCommandRunner;
 use crate::fs::InMemoryFileSystem;
@@ -17,6 +17,7 @@ fn writes_starter_files_under_project_dir() {
         name: Some("my-api".into()),
         package_manager: PackageManager::Npm,
         orm: DbOrm::Drizzle,
+        driver: DrizzleDriver::Pg,
         skip_install: true,
         skip_git: true,
     };
@@ -52,6 +53,7 @@ fn skips_git_and_install_when_requested() {
         name: Some("my-api".into()),
         package_manager: PackageManager::Npm,
         orm: DbOrm::Drizzle,
+        driver: DrizzleDriver::Pg,
         skip_install: true,
         skip_git: true,
     };
@@ -73,6 +75,7 @@ fn runs_git_and_package_manager_install_by_default() {
         name: Some("my-api".into()),
         package_manager: PackageManager::Pnpm,
         orm: DbOrm::Drizzle,
+        driver: DrizzleDriver::Pg,
         skip_install: false,
         skip_git: false,
     };
@@ -85,7 +88,7 @@ fn runs_git_and_package_manager_install_by_default() {
 
 #[test]
 fn substitutes_all_placeholders_into_package_json() {
-    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap();
     let (_, package_json) = files
         .iter()
         .find(|(path, _)| path == Path::new("package.json"))
@@ -103,7 +106,7 @@ fn substitutes_all_placeholders_into_package_json() {
 
 #[test]
 fn substitutes_schema_url_into_nest_cli_json() {
-    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap();
     let (_, nest_cli_json) = files
         .iter()
         .find(|(path, _)| path == Path::new("nest-cli.json"))
@@ -114,7 +117,7 @@ fn substitutes_schema_url_into_nest_cli_json() {
 
 #[test]
 fn includes_every_expected_file() {
-    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap();
     let paths: Vec<_> = files.iter().map(|(p, _)| p.clone()).collect();
 
     for expected in [
@@ -130,7 +133,8 @@ fn includes_every_expected_file() {
         "src/app.service.ts",
         "src/app.controller.spec.ts",
         "src/config/env.validation.ts",
-        "src/database/database-type.ts",
+        "src/database/database.types.ts",
+        "src/database/database.constants.ts",
         "src/database/database.provider.ts",
         "src/database/database.module.ts",
         "src/database/schema/index.ts",
@@ -147,7 +151,7 @@ fn includes_every_expected_file() {
 
 #[test]
 fn dot_env_mirrors_dot_env_example() {
-    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap();
     let (_, env_example) = files
         .iter()
         .find(|(path, _)| path == Path::new(".env.example"))
@@ -164,16 +168,25 @@ fn dot_env_mirrors_dot_env_example() {
 
 #[test]
 fn drizzle_is_the_default_orm_and_pulls_in_schema_folder() {
-    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap();
     let (_, provider) = files
         .iter()
         .find(|(path, _)| path == Path::new("src/database/database.provider.ts"))
         .expect("database.provider.ts should be present");
 
-    assert!(provider.contains("drizzle-orm/postgres-js"));
+    assert!(provider.contains("drizzle-orm/node-postgres"));
     assert!(provider.contains("databaseProvider"));
-    assert!(provider.contains("POSTGRES_CLIENT_TOKEN"));
+    assert!(provider.contains("POSTGRES_CLIENT"));
+    assert!(provider.contains("provide: DRIZZLE"));
     assert!(!provider.contains("{%"));
+
+    let (_, constants) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/database.constants.ts"))
+        .expect("database.constants.ts should be present");
+    assert!(constants.contains("Symbol(\"DRIZZLE\")"));
+    assert!(constants.contains("Symbol(\"POSTGRES_CLIENT\")"));
+    assert!(!constants.contains("{%"));
 
     let (_, postgres_client) = files
         .iter()
@@ -181,12 +194,14 @@ fn drizzle_is_the_default_orm_and_pulls_in_schema_folder() {
         .expect("postgres-client.provider.ts should be present");
     assert!(postgres_client.contains("onApplicationShutdown"));
     assert!(postgres_client.contains("postgresClientProvider"));
+    assert!(postgres_client.contains("provide: POSTGRES_CLIENT"));
 
     let (_, module) = files
         .iter()
         .find(|(path, _)| path == Path::new("src/database/database.module.ts"))
         .expect("database.module.ts should be present");
     assert!(module.contains("postgresClientProvider"));
+    assert!(module.contains("exports: [DRIZZLE]"));
     assert!(!module.contains("{%"));
 
     let (_, drizzle_config) = files
@@ -213,8 +228,9 @@ fn drizzle_is_the_default_orm_and_pulls_in_schema_folder() {
         .iter()
         .find(|(path, _)| path == Path::new("package.json"))
         .expect("package.json should be present");
-    assert!(package_json.contains("\"postgres\":"));
-    assert!(!package_json.contains("\"pg\":"));
+    assert!(package_json.contains("\"pg\":"));
+    assert!(package_json.contains("\"@types/pg\":"));
+    assert!(!package_json.contains("\"postgres\":"));
     assert!(package_json.contains("\"db:generate\": \"drizzle-kit generate\""));
     assert!(!package_json.contains("{%"));
 
@@ -227,8 +243,45 @@ fn drizzle_is_the_default_orm_and_pulls_in_schema_folder() {
 }
 
 #[test]
+fn postgres_js_driver_switches_drivers_throughout() {
+    let files =
+        templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::PostgresJs).unwrap();
+
+    let (_, provider) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/database.provider.ts"))
+        .expect("database.provider.ts should be present");
+    assert!(provider.contains("drizzle-orm/postgres-js"));
+    assert!(provider.contains("postgresClient.sql"));
+    assert!(!provider.contains("{%"));
+
+    let (_, types) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/database.types.ts"))
+        .expect("database.types.ts should be present");
+    assert!(types.contains("PostgresJsDatabase"));
+    assert!(!types.contains("{%"));
+
+    let (_, postgres_client) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/postgres-client.provider.ts"))
+        .expect("postgres-client.provider.ts should be present");
+    assert!(postgres_client.contains("import postgres"));
+    assert!(postgres_client.contains("sql.end()"));
+    assert!(!postgres_client.contains("{%"));
+
+    let (_, package_json) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("package.json"))
+        .expect("package.json should be present");
+    assert!(package_json.contains("\"postgres\":"));
+    assert!(!package_json.contains("\"pg\":"));
+    assert!(!package_json.contains("\"@types/pg\":"));
+}
+
+#[test]
 fn prisma_gets_a_schema_prisma_instead_of_drizzle_schema() {
-    let files = templates::starter_files("my-api", DbOrm::Prisma).unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Prisma, DrizzleDriver::Pg).unwrap();
 
     let (_, schema_prisma) = files
         .iter()
@@ -247,7 +300,7 @@ fn prisma_gets_a_schema_prisma_instead_of_drizzle_schema() {
 
 #[test]
 fn typeorm_gets_neither_drizzle_schema_nor_prisma_schema() {
-    let files = templates::starter_files("my-api", DbOrm::Typeorm).unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Typeorm, DrizzleDriver::Pg).unwrap();
 
     assert!(
         !files

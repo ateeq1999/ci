@@ -17,7 +17,7 @@ pub fn run(args: &Args, ctx: &Context) -> Result<()> {
         .context("`name` is required (pass it as an argument, or include it in --json)")?;
     let root = PathBuf::from(name);
 
-    for (path, contents) in templates::starter_files(name, args.orm)? {
+    for (path, contents) in templates::starter_files(name, args.orm, args.driver)? {
         ctx.fs.write_file(&root.join(path), &contents)?;
     }
 
