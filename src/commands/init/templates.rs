@@ -16,6 +16,10 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../../../templates/init/.gitignore"),
     ),
     (
+        ".env.example",
+        include_str!("../../../templates/init/.env.example"),
+    ),
+    (
         "package.json",
         include_str!("../../../templates/init/package.json"),
     ),
@@ -94,7 +98,7 @@ pub fn starter_files(project_name: &str, db_orm: DbOrm) -> Result<Vec<(PathBuf, 
         DbOrm::Typeorm | DbOrm::Prisma => &[],
     };
 
-    FILES
+    let mut files: Vec<(PathBuf, String)> = FILES
         .iter()
         .chain(orm_files)
         .map(|(path, contents)| {
@@ -106,6 +110,17 @@ pub fn starter_files(project_name: &str, db_orm: DbOrm) -> Result<Vec<(PathBuf, 
                 .map_err(|e| anyhow::anyhow!("{e}"))?;
             Ok((PathBuf::from(*path), rendered))
         })
-        .collect()
+        .collect::<Result<_>>()?;
+
+    // `cp .env.example .env` — the generated project should already have a
+    // working local `.env` (gitignored) instead of requiring that manual step.
+    let env_example = files
+        .iter()
+        .find(|(path, _)| path == std::path::Path::new(".env.example"))
+        .map(|(_, contents)| contents.clone())
+        .expect(".env.example must be in FILES");
+    files.push((PathBuf::from(".env"), env_example));
+
+    Ok(files)
 }
 

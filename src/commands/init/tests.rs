@@ -118,6 +118,8 @@ fn includes_every_expected_file() {
     let paths: Vec<_> = files.iter().map(|(p, _)| p.clone()).collect();
 
     for expected in [
+        ".env.example",
+        ".env",
         "package.json",
         "tsconfig.json",
         "tsconfig.build.json",
@@ -138,6 +140,23 @@ fn includes_every_expected_file() {
             "missing {expected}"
         );
     }
+}
+
+#[test]
+fn dot_env_mirrors_dot_env_example() {
+    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
+    let (_, env_example) = files
+        .iter()
+        .find(|(path, _)| path == Path::new(".env.example"))
+        .expect(".env.example should be present");
+    let (_, env) = files
+        .iter()
+        .find(|(path, _)| path == Path::new(".env"))
+        .expect(".env should be present");
+
+    assert_eq!(env, env_example);
+    assert!(env.contains("DATABASE_URL="));
+    assert!(!env.contains("{{"));
 }
 
 #[test]
