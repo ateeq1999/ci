@@ -22,6 +22,12 @@ impl CommandRunner for RealCommandRunner {
             .status()
             .with_context(|| format!("failed to run `{program}`"))?;
 
+        // Progress spinners (drizzle-kit, prisma, self_update, ...) often
+        // leave the cursor mid-line rather than ending on a newline.
+        // Whatever we or the next command print afterward should start
+        // fresh rather than getting appended to that line.
+        println!();
+
         if !status.success() {
             bail!("`{program} {}` exited with {status}", args.join(" "));
         }
