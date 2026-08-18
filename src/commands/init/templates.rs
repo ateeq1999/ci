@@ -7,6 +7,10 @@ use super::config;
 /// this is only the manifest of which files to render and how.
 const FILES: &[(&str, &str)] = &[
     (
+        ".gitignore",
+        include_str!("../../../templates/init/.gitignore"),
+    ),
+    (
         "package.json",
         include_str!("../../../templates/init/package.json"),
     ),

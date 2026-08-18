@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use crate::commands::init;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(name = "ci", author, version, about, long_about = None)]
 pub struct Cli {
     /// Provide this command's arguments as a JSON payload instead of flags.
     /// Accepts a literal JSON string, or `@path/to/file.json` to read one.
