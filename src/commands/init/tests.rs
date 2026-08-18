@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::args::PackageManager;
+use super::args::{DbOrm, PackageManager};
 use super::*;
 use crate::context::NoopCommandRunner;
 use crate::fs::InMemoryFileSystem;
@@ -16,6 +16,7 @@ fn writes_starter_files_under_project_dir() {
     let args = Args {
         name: Some("my-api".into()),
         package_manager: PackageManager::Npm,
+        orm: DbOrm::Drizzle,
         skip_install: true,
         skip_git: true,
     };
@@ -50,6 +51,7 @@ fn skips_git_and_install_when_requested() {
     let args = Args {
         name: Some("my-api".into()),
         package_manager: PackageManager::Npm,
+        orm: DbOrm::Drizzle,
         skip_install: true,
         skip_git: true,
     };
@@ -70,6 +72,7 @@ fn runs_git_and_package_manager_install_by_default() {
     let args = Args {
         name: Some("my-api".into()),
         package_manager: PackageManager::Pnpm,
+        orm: DbOrm::Drizzle,
         skip_install: false,
         skip_git: false,
     };
@@ -82,7 +85,7 @@ fn runs_git_and_package_manager_install_by_default() {
 
 #[test]
 fn substitutes_all_placeholders_into_package_json() {
-    let files = templates::starter_files("my-api").unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
     let (_, package_json) = files
         .iter()
         .find(|(path, _)| path == Path::new("package.json"))
@@ -95,11 +98,12 @@ fn substitutes_all_placeholders_into_package_json() {
     )));
     assert!(package_json.contains(&format!("\"node\": \"{}\"", config::NODE_ENGINE_RANGE)));
     assert!(!package_json.contains("{{"));
+    assert!(!package_json.contains("{%"));
 }
 
 #[test]
 fn substitutes_schema_url_into_nest_cli_json() {
-    let files = templates::starter_files("my-api").unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
     let (_, nest_cli_json) = files
         .iter()
         .find(|(path, _)| path == Path::new("nest-cli.json"))
@@ -110,7 +114,7 @@ fn substitutes_schema_url_into_nest_cli_json() {
 
 #[test]
 fn includes_every_expected_file() {
-    let files = templates::starter_files("my-api").unwrap();
+    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
     let paths: Vec<_> = files.iter().map(|(p, _)| p.clone()).collect();
 
     for expected in [
@@ -123,10 +127,52 @@ fn includes_every_expected_file() {
         "src/app.controller.ts",
         "src/app.service.ts",
         "src/app.controller.spec.ts",
+        "src/config/env.validation.ts",
+        "src/database/database-type.ts",
+        "src/database/database.provider.ts",
+        "src/database/database.module.ts",
+        "src/database/schema.ts",
     ] {
         assert!(
             paths.contains(&PathBuf::from(expected)),
             "missing {expected}"
         );
+    }
+}
+
+#[test]
+fn drizzle_is_the_default_orm_and_pulls_in_schema_ts() {
+    let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
+    let (_, provider) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/database.provider.ts"))
+        .expect("database.provider.ts should be present");
+
+    assert!(provider.contains("drizzle-orm/node-postgres"));
+    assert!(provider.contains("databaseProvider"));
+    assert!(!provider.contains("{%"));
+    assert!(
+        files
+            .iter()
+            .any(|(path, _)| path == Path::new("src/database/schema.ts"))
+    );
+}
+
+#[test]
+fn typeorm_and_prisma_skip_the_drizzle_schema_file() {
+    for orm in [DbOrm::Typeorm, DbOrm::Prisma] {
+        let files = templates::starter_files("my-api", orm).unwrap();
+        assert!(
+            !files
+                .iter()
+                .any(|(path, _)| path == Path::new("src/database/schema.ts")),
+            "{orm:?} should not include drizzle's schema.ts"
+        );
+
+        let (_, package_json) = files
+            .iter()
+            .find(|(path, _)| path == Path::new("package.json"))
+            .expect("package.json should be present");
+        assert!(!package_json.contains("{%"));
     }
 }

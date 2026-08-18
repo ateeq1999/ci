@@ -4,6 +4,7 @@ use anyhow::Result;
 use atom_engine::Atom;
 use serde_json::json;
 
+use super::args::DbOrm;
 use super::config;
 
 /// (relative path, template contents) pairs for the minimal NestJS starter.
@@ -50,21 +51,52 @@ const FILES: &[(&str, &str)] = &[
         "src/app.controller.spec.ts",
         include_str!("../../../templates/init/src/app.controller.spec.ts"),
     ),
+    (
+        "src/config/env.validation.ts",
+        include_str!("../../../templates/init/src/config/env.validation.ts"),
+    ),
+    (
+        "src/database/database-type.ts",
+        include_str!("../../../templates/db/database-type.ts"),
+    ),
+    (
+        "src/database/database.provider.ts",
+        include_str!("../../../templates/db/database.provider.ts"),
+    ),
+    (
+        "src/database/database.module.ts",
+        include_str!("../../../templates/db/database.module.ts"),
+    ),
 ];
 
+/// ORM-specific files layered on top of `FILES` — only rendered when the
+/// chosen `db_orm` needs them (e.g. Drizzle's `schema.ts`).
+const DRIZZLE_FILES: &[(&str, &str)] = &[(
+    "src/database/schema.ts",
+    include_str!("../../../templates/db/schema.ts"),
+)];
+
 /// Returns the starter project's files with substitution placeholders
-/// (`{{project_name}}`, `{{package_version}}`, ...) filled in.
-pub fn starter_files(project_name: &str) -> Result<Vec<(PathBuf, String)>> {
+/// (`{{project_name}}`, `{{package_version}}`, ...) filled in, plus a
+/// `DatabaseModule` wired up for `db_orm`.
+pub fn starter_files(project_name: &str, db_orm: DbOrm) -> Result<Vec<(PathBuf, String)>> {
     let mut engine = Atom::new();
     let ctx = json!({
         "project_name": project_name,
         "package_version": config::STARTER_PACKAGE_VERSION,
         "node_engine_range": config::NODE_ENGINE_RANGE,
         "nest_cli_schema_url": config::NEST_CLI_SCHEMA_URL,
+        "db_orm": db_orm.as_str(),
     });
+
+    let orm_files: &[(&str, &str)] = match db_orm {
+        DbOrm::Drizzle => DRIZZLE_FILES,
+        DbOrm::Typeorm | DbOrm::Prisma => &[],
+    };
 
     FILES
         .iter()
+        .chain(orm_files)
         .map(|(path, contents)| {
             engine
                 .add_template(path, contents)

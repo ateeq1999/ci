@@ -10,6 +10,11 @@ pub struct Args {
     #[serde(default)]
     pub package_manager: PackageManager,
 
+    /// ORM used to talk to Postgres from the generated DatabaseModule
+    #[arg(long, value_enum, default_value = "drizzle")]
+    #[serde(default)]
+    pub orm: DbOrm,
+
     /// Write files without running the package manager install
     #[arg(long)]
     #[serde(default)]
@@ -36,6 +41,25 @@ impl PackageManager {
             PackageManager::Npm => "npm",
             PackageManager::Pnpm => "pnpm",
             PackageManager::Yarn => "yarn",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, ValueEnum, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DbOrm {
+    #[default]
+    Drizzle,
+    Typeorm,
+    Prisma,
+}
+
+impl DbOrm {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DbOrm::Drizzle => "drizzle",
+            DbOrm::Typeorm => "typeorm",
+            DbOrm::Prisma => "prisma",
         }
     }
 }
