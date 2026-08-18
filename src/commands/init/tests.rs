@@ -217,6 +217,8 @@ fn drizzle_is_the_default_orm_and_pulls_in_schema_folder() {
     assert!(users_schema.contains("uuid(\"id\")"));
     assert!(users_schema.contains("email"));
     assert!(users_schema.contains("password"));
+    assert!(users_schema.contains("type User = typeof users.$inferSelect"));
+    assert!(users_schema.contains("type NewUser = typeof users.$inferInsert"));
 
     let (_, schema_index) = files
         .iter()
