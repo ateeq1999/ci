@@ -133,7 +133,10 @@ fn includes_every_expected_file() {
         "src/database/database-type.ts",
         "src/database/database.provider.ts",
         "src/database/database.module.ts",
-        "src/database/schema.ts",
+        "src/database/schema/index.ts",
+        "src/database/schema/users.ts",
+        "src/database/postgres-client.provider.ts",
+        "drizzle.config.ts",
     ] {
         assert!(
             paths.contains(&PathBuf::from(expected)),
@@ -160,38 +163,106 @@ fn dot_env_mirrors_dot_env_example() {
 }
 
 #[test]
-fn drizzle_is_the_default_orm_and_pulls_in_schema_ts() {
+fn drizzle_is_the_default_orm_and_pulls_in_schema_folder() {
     let files = templates::starter_files("my-api", DbOrm::Drizzle).unwrap();
     let (_, provider) = files
         .iter()
         .find(|(path, _)| path == Path::new("src/database/database.provider.ts"))
         .expect("database.provider.ts should be present");
 
-    assert!(provider.contains("drizzle-orm/node-postgres"));
+    assert!(provider.contains("drizzle-orm/postgres-js"));
     assert!(provider.contains("databaseProvider"));
+    assert!(provider.contains("POSTGRES_CLIENT_TOKEN"));
     assert!(!provider.contains("{%"));
+
+    let (_, postgres_client) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/postgres-client.provider.ts"))
+        .expect("postgres-client.provider.ts should be present");
+    assert!(postgres_client.contains("onApplicationShutdown"));
+    assert!(postgres_client.contains("postgresClientProvider"));
+
+    let (_, module) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/database.module.ts"))
+        .expect("database.module.ts should be present");
+    assert!(module.contains("postgresClientProvider"));
+    assert!(!module.contains("{%"));
+
+    let (_, drizzle_config) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("drizzle.config.ts"))
+        .expect("drizzle.config.ts should be present");
+    assert!(drizzle_config.contains("dialect: \"postgresql\""));
+
+    let (_, users_schema) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/schema/users.ts"))
+        .expect("schema/users.ts should be present");
+    assert!(users_schema.contains("uuid(\"id\")"));
+    assert!(users_schema.contains("email"));
+    assert!(users_schema.contains("password"));
+
+    let (_, schema_index) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/schema/index.ts"))
+        .expect("schema/index.ts should be present");
+    assert!(schema_index.contains("./users"));
+
+    let (_, package_json) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("package.json"))
+        .expect("package.json should be present");
+    assert!(package_json.contains("\"postgres\":"));
+    assert!(!package_json.contains("\"pg\":"));
+    assert!(package_json.contains("\"db:generate\": \"drizzle-kit generate\""));
+    assert!(!package_json.contains("{%"));
+
     assert!(
-        files
+        !files
             .iter()
-            .any(|(path, _)| path == Path::new("src/database/schema.ts"))
+            .any(|(path, _)| path == Path::new("prisma/schema.prisma")),
+        "drizzle should not include prisma/schema.prisma"
     );
 }
 
 #[test]
-fn typeorm_and_prisma_skip_the_drizzle_schema_file() {
-    for orm in [DbOrm::Typeorm, DbOrm::Prisma] {
-        let files = templates::starter_files("my-api", orm).unwrap();
-        assert!(
-            !files
-                .iter()
-                .any(|(path, _)| path == Path::new("src/database/schema.ts")),
-            "{orm:?} should not include drizzle's schema.ts"
-        );
+fn prisma_gets_a_schema_prisma_instead_of_drizzle_schema() {
+    let files = templates::starter_files("my-api", DbOrm::Prisma).unwrap();
 
-        let (_, package_json) = files
+    let (_, schema_prisma) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("prisma/schema.prisma"))
+        .expect("prisma/schema.prisma should be present");
+    assert!(schema_prisma.contains("model User"));
+    assert!(!schema_prisma.contains("{%"));
+
+    assert!(
+        !files
             .iter()
-            .find(|(path, _)| path == Path::new("package.json"))
-            .expect("package.json should be present");
-        assert!(!package_json.contains("{%"));
-    }
+            .any(|(path, _)| path == Path::new("src/database/schema/index.ts")),
+        "prisma should not include drizzle's schema folder"
+    );
+}
+
+#[test]
+fn typeorm_gets_neither_drizzle_schema_nor_prisma_schema() {
+    let files = templates::starter_files("my-api", DbOrm::Typeorm).unwrap();
+
+    assert!(
+        !files
+            .iter()
+            .any(|(path, _)| path == Path::new("src/database/schema/index.ts"))
+    );
+    assert!(
+        !files
+            .iter()
+            .any(|(path, _)| path == Path::new("prisma/schema.prisma"))
+    );
+
+    let (_, package_json) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("package.json"))
+        .expect("package.json should be present");
+    assert!(!package_json.contains("{%"));
 }

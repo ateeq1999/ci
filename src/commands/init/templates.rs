@@ -74,10 +74,29 @@ const FILES: &[(&str, &str)] = &[
 ];
 
 /// ORM-specific files layered on top of `FILES` — only rendered when the
-/// chosen `db_orm` needs them (e.g. Drizzle's `schema.ts`).
-const DRIZZLE_FILES: &[(&str, &str)] = &[(
-    "src/database/schema.ts",
-    include_str!("../../../templates/db/schema.ts"),
+/// chosen `db_orm` needs them.
+const DRIZZLE_FILES: &[(&str, &str)] = &[
+    (
+        "src/database/schema/index.ts",
+        include_str!("../../../templates/db/schema/index.ts"),
+    ),
+    (
+        "src/database/schema/users.ts",
+        include_str!("../../../templates/db/schema/users.ts"),
+    ),
+    (
+        "src/database/postgres-client.provider.ts",
+        include_str!("../../../templates/db/postgres-client.provider.ts"),
+    ),
+    (
+        "drizzle.config.ts",
+        include_str!("../../../templates/db/drizzle.config.ts"),
+    ),
+];
+
+const PRISMA_FILES: &[(&str, &str)] = &[(
+    "prisma/schema.prisma",
+    include_str!("../../../templates/db/schema.prisma"),
 )];
 
 /// Returns the starter project's files with substitution placeholders
@@ -95,7 +114,8 @@ pub fn starter_files(project_name: &str, db_orm: DbOrm) -> Result<Vec<(PathBuf, 
 
     let orm_files: &[(&str, &str)] = match db_orm {
         DbOrm::Drizzle => DRIZZLE_FILES,
-        DbOrm::Typeorm | DbOrm::Prisma => &[],
+        DbOrm::Prisma => PRISMA_FILES,
+        DbOrm::Typeorm => &[],
     };
 
     let mut files: Vec<(PathBuf, String)> = FILES

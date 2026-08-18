@@ -8,10 +8,16 @@ import type { DataSource } from "typeorm";
 
 export type Database = DataSource;
 {%- else %}
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import type { Sql } from "postgres";
 import type * as schema from "./schema";
 
-export type Database = NodePgDatabase<typeof schema>;
+export type Database = PostgresJsDatabase<typeof schema>;
+
+/** Injection token for the underlying postgres.js client, kept separate from
+ *  `DATABASE_TOKEN` so its lifecycle (closing the connection on shutdown)
+ *  can be managed independently of the Drizzle wrapper. */
+export const POSTGRES_CLIENT_TOKEN = new InjectionToken<Sql>("POSTGRES_CLIENT");
 {%- endif %}
 
 /** Injection token other modules use to access the database client. */
