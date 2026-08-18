@@ -1,5 +1,8 @@
 mod args;
 mod commands;
+mod fs;
+mod json_payload;
+mod templates;
 
 use args::Cli;
 use clap::Parser;

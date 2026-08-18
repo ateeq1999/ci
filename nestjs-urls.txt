@@ -1,0 +1,11 @@
+nestjs docs site links:
+https://docs.nestjs.com/first-steps
+https://docs.nestjs.com/controllers
+https://docs.nestjs.com/providers
+https://docs.nestjs.com/modules
+https://docs.nestjs.com/middleware
+https://docs.nestjs.com/exception-filters
+https://docs.nestjs.com/pipes
+https://docs.nestjs.com/guards
+https://docs.nestjs.com/interceptors
+https://docs.nestjs.com/custom-decorators

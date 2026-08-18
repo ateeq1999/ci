@@ -1,19 +1,14 @@
-mod dev;
+mod init;
 
 use crate::args::{Cli, Commands};
+use crate::fs::RealFileSystem;
+use crate::json_payload;
 
 pub fn run(cli: &Cli) -> anyhow::Result<()> {
     match &cli.command {
-        Some(Commands::Run { port }) => {
-            println!("Running on port: {:?}", port);
-        }
-        Some(Commands::Dev) => {
-            dev::dev();
-        }
-        None => {
-            println!("Hello, {}!", cli.name.as_deref().unwrap_or("world"));
+        Commands::Init(args) => {
+            let args = json_payload::resolve(args.clone(), cli.json.as_deref())?;
+            init::run(&args, &RealFileSystem)
         }
     }
-
-    Ok(())
 }
