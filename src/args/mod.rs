@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::init;
+use crate::commands::{init, update};
 
 #[derive(Parser)]
 #[command(name = "ci", author, version, about, long_about = None)]
@@ -18,4 +18,6 @@ pub struct Cli {
 pub enum Commands {
     /// Create a new NestJS project
     Init(init::Args),
+    /// Update this CLI to the latest release
+    Update(update::Args),
 }
