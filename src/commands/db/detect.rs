@@ -17,11 +17,6 @@ struct ProjectConfig {
 #[derive(Debug)]
 pub struct Detected {
     pub orm: DbOrm,
-    // Not read yet — no command branch in `mod.rs` needs it today (the
-    // drizzle-kit/prisma/typeorm CLI invocations are driver-agnostic), but
-    // Gap 4 in db.md (a driver-based drop script for `migrate fresh` on
-    // Drizzle) will need it.
-    #[allow(dead_code)]
     pub driver: DrizzleDriver,
 }
 

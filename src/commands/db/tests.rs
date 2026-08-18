@@ -15,6 +15,30 @@ fn ctx() -> (Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
     )
 }
 
+/// `run()` resolves paths against the real `std::env::current_dir()` (it
+/// has no `--path` flag, matching `ci db`'s "operate on the project you're
+/// standing in" design), so `InMemoryFileSystem` entries need keys that
+/// match that same absolute root, not bare relative paths.
+fn root() -> std::path::PathBuf {
+    std::env::current_dir().unwrap()
+}
+
+fn ctx_with_database_url(url: &str) -> (Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
+    let fs = InMemoryFileSystem::default();
+    fs.written
+        .borrow_mut()
+        .insert(root().join(".env"), format!("DATABASE_URL={url}\n"));
+    let commands = NoopCommandRunner::default();
+    let calls = commands.calls.clone();
+    (
+        Context {
+            fs: Box::new(fs),
+            commands: Box::new(commands),
+        },
+        calls,
+    )
+}
+
 fn run_args(orm: DbOrm) -> RunArgs {
     RunArgs { orm: Some(orm) }
 }
@@ -163,7 +187,65 @@ fn migrate_fresh_typeorm_drops_schema_then_runs() {
 }
 
 #[test]
-fn migrate_fresh_drizzle_errors_clearly() {
+fn migrate_fresh_drizzle_drops_schema_then_regenerates() {
+    let (ctx, calls) = ctx_with_database_url("postgres://user:pass@localhost:5432/my_api");
+    run(
+        &Args {
+            command: Command::Migrate(migrate_args(
+                DbOrm::Drizzle,
+                Some(MigrateAction::Fresh(destructive())),
+            )),
+        },
+        &ctx,
+    )
+    .unwrap();
+
+    let calls = calls.borrow();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[0].starts_with("node -e"));
+    assert!(calls[0].contains("require(\"pg\")"), "should use the pg driver by default");
+    assert!(calls[0].contains("postgres://user:pass@localhost:5432/my_api"));
+    assert!(calls[0].contains("DROP SCHEMA IF EXISTS public CASCADE"));
+    assert!(calls[0].contains("DROP SCHEMA IF EXISTS drizzle CASCADE"));
+    assert_eq!(calls[1], "npx drizzle-kit generate");
+    assert_eq!(calls[2], "npx drizzle-kit migrate");
+}
+
+#[test]
+fn migrate_fresh_drizzle_postgres_js_driver_uses_the_postgres_js_script() {
+    let fs = InMemoryFileSystem::default();
+    fs.written.borrow_mut().insert(
+        root().join(".env"),
+        "DATABASE_URL=postgres://localhost/my_api\n".to_string(),
+    );
+    fs.written.borrow_mut().insert(
+        root().join("ci/config.json"),
+        r#"{"ciVersion":"0.1.1","orm":"drizzle","driver":"postgres-js","packageManager":"npm"}"#
+            .to_string(),
+    );
+    let commands = NoopCommandRunner::default();
+    let calls = commands.calls.clone();
+    let ctx = Context {
+        fs: Box::new(fs),
+        commands: Box::new(commands),
+    };
+
+    run(
+        &Args {
+            command: Command::Migrate(MigrateArgs {
+                action: Some(MigrateAction::Fresh(destructive())),
+                orm: None,
+            }),
+        },
+        &ctx,
+    )
+    .unwrap();
+
+    assert!(calls.borrow()[0].contains("require(\"postgres\")"));
+}
+
+#[test]
+fn migrate_fresh_drizzle_errors_clearly_without_a_env_file() {
     let (ctx, calls) = ctx();
     let err = run(
         &Args {
@@ -176,7 +258,8 @@ fn migrate_fresh_drizzle_errors_clearly() {
     )
     .unwrap_err();
 
-    assert!(err.to_string().contains("isn't supported for Drizzle"));
+    assert!(err.to_string().contains(".env"));
+    assert!(err.to_string().contains("not found"));
     assert!(calls.borrow().is_empty());
 }
 
@@ -201,21 +284,40 @@ fn migrate_refresh_prisma_is_identical_to_fresh() {
 }
 
 #[test]
-fn migrate_refresh_typeorm_and_drizzle_are_not_implemented() {
-    for orm in [DbOrm::Typeorm, DbOrm::Drizzle] {
-        let (ctx, _calls) = ctx();
-        let err = run(
-            &Args {
-                command: Command::Migrate(migrate_args(
-                    orm,
-                    Some(MigrateAction::Refresh(destructive())),
-                )),
-            },
-            &ctx,
-        )
-        .unwrap_err();
-        assert!(!err.to_string().is_empty(), "orm = {orm:?}");
-    }
+fn migrate_refresh_typeorm_is_not_implemented() {
+    let (ctx, _calls) = ctx();
+    let err = run(
+        &Args {
+            command: Command::Migrate(migrate_args(
+                DbOrm::Typeorm,
+                Some(MigrateAction::Refresh(destructive())),
+            )),
+        },
+        &ctx,
+    )
+    .unwrap_err();
+    assert!(!err.to_string().is_empty());
+}
+
+#[test]
+fn migrate_refresh_drizzle_reuses_the_fresh_drop_and_rebuild() {
+    let (ctx, calls) = ctx_with_database_url("postgres://localhost/my_api");
+    run(
+        &Args {
+            command: Command::Migrate(migrate_args(
+                DbOrm::Drizzle,
+                Some(MigrateAction::Refresh(destructive())),
+            )),
+        },
+        &ctx,
+    )
+    .unwrap();
+
+    let calls = calls.borrow();
+    assert_eq!(calls.len(), 3);
+    assert!(calls[0].starts_with("node -e"));
+    assert_eq!(calls[1], "npx drizzle-kit generate");
+    assert_eq!(calls[2], "npx drizzle-kit migrate");
 }
 
 #[test]

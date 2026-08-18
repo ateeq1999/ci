@@ -3,13 +3,50 @@ mod detect;
 
 use std::path::Path;
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 pub use args::Args;
 use args::{Command, MigrateAction};
 
 use crate::context::Context;
-use crate::db_orm::DbOrm;
+use crate::db_orm::{DbOrm, DrizzleDriver};
+
+/// Drops and recreates `public` (every app table), plus drops the
+/// `drizzle` schema drizzle-kit's `migrate` command keeps its
+/// `__drizzle_migrations` journal in (default location, per drizzle-kit's
+/// docs — not configured otherwise by `drizzle.config.ts`). Dropping only
+/// `public` and leaving the journal behind would make the next `migrate`
+/// think everything's already applied against a now-empty database.
+const DROP_SCHEMA_SQL: &str = "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public; DROP SCHEMA IF EXISTS drizzle CASCADE;";
+
+/// Connects with whichever driver the project uses and runs
+/// `DROP_SCHEMA_SQL`. The connection string is passed as a `node` argument
+/// (after `--`), not interpolated into the script text, so it doesn't need
+/// escaping even if it contains quotes.
+const PG_DROP_SCRIPT: &str = r#"
+const { Client } = require("pg");
+(async () => {
+  const client = new Client({ connectionString: process.argv[1] });
+  await client.connect();
+  await client.query(process.argv[2]);
+  await client.end();
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+"#;
+
+const POSTGRES_JS_DROP_SCRIPT: &str = r#"
+const postgres = require("postgres");
+(async () => {
+  const sql = postgres(process.argv[1]);
+  await sql.unsafe(process.argv[2]);
+  await sql.end();
+})().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});
+"#;
 
 pub fn run(args: &Args, ctx: &Context) -> Result<()> {
     let root = std::env::current_dir()?;
@@ -31,7 +68,7 @@ pub fn run(args: &Args, ctx: &Context) -> Result<()> {
                         a.force,
                         is_production,
                     )?;
-                    migrate_fresh(ctx, &root, detected.orm)
+                    migrate_fresh(ctx, &root, detected.orm, detected.driver)
                 }
                 Some(MigrateAction::Refresh(a)) => {
                     guard_destructive(
@@ -40,7 +77,7 @@ pub fn run(args: &Args, ctx: &Context) -> Result<()> {
                         a.force,
                         is_production,
                     )?;
-                    migrate_refresh(ctx, &root, detected.orm)
+                    migrate_refresh(ctx, &root, detected.orm, detected.driver)
                 }
                 Some(MigrateAction::Rollback(a)) => {
                     guard_destructive(
@@ -66,12 +103,14 @@ pub fn run(args: &Args, ctx: &Context) -> Result<()> {
 fn init(ctx: &Context, root: &Path, orm: DbOrm) -> Result<()> {
     match orm {
         DbOrm::Drizzle => {
-            ctx.commands.run("npx", &["drizzle-kit", "generate"], root)?;
+            ctx.commands
+                .run("npx", &["drizzle-kit", "generate"], root)?;
             ctx.commands.run("npx", &["drizzle-kit", "migrate"], root)
         }
-        DbOrm::Prisma => ctx
-            .commands
-            .run("npx", &["prisma", "migrate", "dev", "--name", "init"], root),
+        DbOrm::Prisma => {
+            ctx.commands
+                .run("npx", &["prisma", "migrate", "dev", "--name", "init"], root)
+        }
         DbOrm::Typeorm => {
             ctx.commands.run(
                 "npx",
@@ -117,12 +156,58 @@ fn migrate(ctx: &Context, root: &Path, orm: DbOrm) -> Result<()> {
     }
 }
 
-fn migrate_fresh(ctx: &Context, root: &Path, orm: DbOrm) -> Result<()> {
+/// Reads `DATABASE_URL` out of the project's `.env` (not `.env.example` —
+/// `ci init` copies one to the other, but only `.env` is meant to hold a
+/// real, locally-usable value). A hand-rolled single-key scan rather than a
+/// full dotenv parser: this only ever needs the one variable, and `.env` is
+/// a file this same tool wrote in the first place.
+fn read_database_url(ctx: &Context, root: &Path) -> Result<String> {
+    let env_path = root.join(".env");
+    let contents = ctx.fs.try_read_to_string(&env_path)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "{} not found — copy .env.example to .env and set DATABASE_URL",
+            env_path.display()
+        )
+    })?;
+
+    for line in contents.lines() {
+        if let Some(value) = line.trim().strip_prefix("DATABASE_URL=") {
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if !value.is_empty() {
+                return Ok(value.to_string());
+            }
+        }
+    }
+    bail!("DATABASE_URL not set in {}", env_path.display());
+}
+
+/// Drops and recreates the app's schema for Drizzle — see `DROP_SCHEMA_SQL`
+/// for why both `public` and `drizzle` get dropped. There's no drizzle-kit
+/// command for this (confirmed against its docs — `generate`/`migrate`/
+/// `push`/`pull`/`studio`/`check`/`up`/`export`, nothing that touches
+/// existing tables destructively), so this connects directly with
+/// whichever driver the project is configured for.
+fn drop_drizzle_schema(ctx: &Context, root: &Path, driver: DrizzleDriver) -> Result<()> {
+    let database_url = read_database_url(ctx, root)?;
+    let script = match driver {
+        DrizzleDriver::Pg => PG_DROP_SCRIPT,
+        DrizzleDriver::PostgresJs => POSTGRES_JS_DROP_SCRIPT,
+    };
+    ctx.commands.run(
+        "node",
+        &["-e", script, "--", &database_url, DROP_SCHEMA_SQL],
+        root,
+    )
+}
+
+fn migrate_fresh(ctx: &Context, root: &Path, orm: DbOrm, driver: DrizzleDriver) -> Result<()> {
     match orm {
-        DbOrm::Drizzle => bail!(
-            "`ci db migrate fresh` isn't supported for Drizzle yet — drizzle-kit has no \
-             schema-drop command. See db.md's Gap 4."
-        ),
+        DbOrm::Drizzle => {
+            drop_drizzle_schema(ctx, root, driver)?;
+            ctx.commands
+                .run("npx", &["drizzle-kit", "generate"], root)?;
+            ctx.commands.run("npx", &["drizzle-kit", "migrate"], root)
+        }
         DbOrm::Prisma => ctx
             .commands
             .run("npx", &["prisma", "migrate", "reset", "--force"], root),
@@ -153,16 +238,16 @@ fn migrate_fresh(ctx: &Context, root: &Path, orm: DbOrm) -> Result<()> {
 
 /// For Prisma, identical to `migrate_fresh` — `prisma migrate reset` already
 /// drops, re-applies, and re-seeds in one command, so it satisfies both
-/// `fresh` and `refresh` semantics with nothing extra to implement.
-fn migrate_refresh(ctx: &Context, root: &Path, orm: DbOrm) -> Result<()> {
+/// `fresh` and `refresh` semantics with nothing extra to implement. Same
+/// story for Drizzle: with no down-migration story at all, "roll back
+/// everything then re-apply" and "drop everything then re-apply" are the
+/// same operation, so it reuses `migrate_fresh`'s drop-and-rebuild.
+fn migrate_refresh(ctx: &Context, root: &Path, orm: DbOrm, driver: DrizzleDriver) -> Result<()> {
     match orm {
         DbOrm::Prisma => ctx
             .commands
             .run("npx", &["prisma", "migrate", "reset", "--force"], root),
-        DbOrm::Drizzle => bail!(
-            "`ci db migrate refresh` isn't supported for Drizzle yet — drizzle-kit has no \
-             down-migration story. See db.md's Gap 4."
-        ),
+        DbOrm::Drizzle => migrate_fresh(ctx, root, orm, driver),
         DbOrm::Typeorm => bail!(
             "`ci db migrate refresh` isn't implemented for TypeORM yet — safely reverting \
              *all* migrations needs to know how many exist first; only \

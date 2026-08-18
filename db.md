@@ -12,12 +12,21 @@ Shipped:
 - TypeORM's `src/database/data-source.ts` (Gap 1) — `database.provider.ts`
   now imports it instead of building a second `DataSource`.
 - `ci db init`, `ci db migrate` — real, for all three ORMs.
-- `ci db migrate fresh` — real for Prisma (`migrate reset --force`) and
-  TypeORM (`schema:drop` + `migration:run`); errors clearly for Drizzle
-  (Gap 4, still open — no drop primitive).
-- `ci db migrate refresh` — real for Prisma (identical to `fresh`); errors
-  clearly for Drizzle (Gap 4) and TypeORM (revert-loop termination isn't
-  implemented — see the mapping table).
+- Gap 4 closed: `ci db migrate fresh` — real for all three ORMs now.
+  Prisma via `migrate reset --force`; TypeORM via `schema:drop` +
+  `migration:run`; Drizzle by connecting directly (with whichever of
+  `pg`/`postgres` the project uses) and running `DROP SCHEMA public
+  CASCADE` + `DROP SCHEMA drizzle CASCADE` (drizzle-kit's own migration
+  journal lives in that second schema — dropping only `public` would
+  leave the journal thinking migrations were still applied against an
+  empty database), then `generate` + `migrate` to rebuild. Verified against
+  a real throwaway Postgres container, not just mocked tests.
+- `ci db migrate refresh` — real for Prisma (identical to `fresh`) *and*
+  Drizzle now (same reasoning as `fresh` — no down-migration story means
+  "roll back everything" and "drop everything" are the same operation, so
+  it reuses `migrate_fresh`'s drop-and-rebuild). Still errors clearly for
+  TypeORM (revert-loop termination isn't implemented — see the mapping
+  table).
 - `ci db migrate rollback` — real for TypeORM (`migration:revert`, repeated
   `--step` times); errors clearly for Drizzle/Prisma (the underlying tools
   don't support it at all, not a gap in `ci`).
@@ -104,9 +113,9 @@ message naming what was (or wasn't) found rather than guessing.
 | `init` | `generate` then `migrate` | `migrate dev --name init` | `migration:run` (after first `migration:generate`) |
 | `migrate` | `migrate` | `migrate deploy` | `migration:run` |
 | `seed` | run `src/database/seed.ts` (tsx) | `db seed` | run `src/database/seed.ts` (tsx) |
-| `migrate fresh` | ⚠️ no built-in drop — see Gap 2 | `migrate reset` (drops, re-applies, re-seeds — one command covers both fresh *and* refresh) | `schema:drop` then `migration:run` |
-| `migrate refresh` | ⚠️ same as `fresh` — no down-migration story, see Gap 2 | `migrate reset` (identical to `fresh` for Prisma) | loop `migration:revert` to zero, then `migration:run` |
-| `migrate rollback` | ⚠️ not supported — see Gap 2 | ⚠️ not supported — Prisma has no single-migration undo, only `reset` | `migration:revert` (repeat `--step` times) |
+| `migrate fresh` | `DROP SCHEMA public/drizzle CASCADE` (direct connection — Gap 4, closed), then `generate` + `migrate` | `migrate reset` (drops, re-applies, re-seeds — one command covers both fresh *and* refresh) | `schema:drop` then `migration:run` |
+| `migrate refresh` | same as `fresh` — no down-migration story, so "roll back everything" and "drop everything" are the same operation | `migrate reset` (identical to `fresh` for Prisma) | ⚠️ not implemented — see the "Still open" note below |
+| `migrate rollback` | ⚠️ not supported — no per-migration undo, even after Gap 4 (that closed the *drop-everything* case, not *undo-just-the-last-one*) | ⚠️ not supported — Prisma has no single-migration undo, only `reset` | `migration:revert` (repeat `--step` times) |
 
 The ⚠️ rows aren't oversights — they reflect real gaps in the underlying
 tools, not something `ci` can paper over. For those, `ci db <subcommand>`
@@ -134,14 +143,24 @@ a down migration or restore from a backup").
    prisma/seed.ts" }` block in `package.json` and a `prisma/seed.ts`
    template (different path convention than the other two, since Prisma
    keeps everything under `prisma/`).
-4. **`migrate fresh` for Drizzle** needs *something* to drop with — no
-   `drizzle-kit drop-database` equivalent exists. Options: shell out to
-   `psql "$DATABASE_URL" -c "DROP SCHEMA public CASCADE; CREATE SCHEMA
-   public;"` (needs `psql` on PATH — an extra runtime dependency this tool
-   doesn't currently require), or connect via the driver already in
-   `package.json` (`pg`/`postgres`) from a small throwaway Node script.
-   Leaning toward the driver-based script since it needs no extra binary,
-   but it's the least settled piece of this plan.
+4. ~~**`migrate fresh` for Drizzle** needs *something* to drop with~~ —
+   **closed.** Went with the driver-based `node -e` script (not `psql` —
+   no extra binary needed): `read_database_url` pulls `DATABASE_URL` out
+   of the project's `.env`, then a small inline script (`pg` or
+   `postgres`, matching the project's configured driver) runs `DROP SCHEMA
+   public CASCADE; CREATE SCHEMA public; DROP SCHEMA drizzle CASCADE;` —
+   the connection string is passed as a `node` CLI argument after `--`,
+   never interpolated into the script text, so it needs no escaping.
+   `migrate refresh` reuses this too (see the mapping table). Verified
+   against a real Postgres container: seeded a row, ran `migrate fresh`,
+   confirmed the row was gone, `public`'s owner changed (proof of a real
+   drop+recreate, not a no-op), and the `drizzle` migrations journal came
+   back clean.
+5. **`migrate refresh` for TypeORM** — still open. Safely reverting *all*
+   migrations needs to know how many exist first (no bounded loop like
+   Drizzle/Prisma's "just drop and rebuild" trick applies here, since
+   TypeORM's rollback is real and per-migration). Only
+   `migrate rollback --step N` (explicit count) is implemented so far.
 
 ---
 
