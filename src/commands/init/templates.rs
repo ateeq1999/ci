@@ -89,8 +89,8 @@ const DRIZZLE_FILES: &[(&str, &str)] = &[
         include_str!("../../../templates/db/schema/users.ts"),
     ),
     (
-        "src/database/postgres-client.provider.ts",
-        include_str!("../../../templates/db/postgres-client.provider.ts"),
+        "src/database/database-client.provider.ts",
+        include_str!("../../../templates/db/database-client.provider.ts"),
     ),
     (
         "drizzle.config.ts",

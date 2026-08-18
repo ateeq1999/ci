@@ -28,23 +28,23 @@ export const databaseProvider: Provider = {
 {%- elif db_driver == "postgres-js" %}
 import { drizzle } from "drizzle-orm/postgres-js";
 import * as schema from "./schema";
-import { DRIZZLE, POSTGRES_CLIENT } from "./database.constants";
-import type { PostgresClient } from "./postgres-client.provider";
+import { DRIZZLE, DB_CLIENT } from "./database.constants";
+import type { PostgresClient } from "./database-client.provider";
 
 export const databaseProvider: Provider = {
   provide: DRIZZLE,
-  inject: [POSTGRES_CLIENT],
+  inject: [DB_CLIENT],
   useFactory: (postgresClient: PostgresClient) => drizzle(postgresClient.sql, { schema }),
 };
 {%- else %}
 import { drizzle } from "drizzle-orm/node-postgres";
 import * as schema from "./schema";
-import { DRIZZLE, POSTGRES_CLIENT } from "./database.constants";
-import type { PostgresClient } from "./postgres-client.provider";
+import { DRIZZLE, DB_CLIENT } from "./database.constants";
+import type { PostgresClient } from "./database-client.provider";
 
 export const databaseProvider: Provider = {
   provide: DRIZZLE,
-  inject: [POSTGRES_CLIENT],
+  inject: [DB_CLIENT],
   useFactory: (postgresClient: PostgresClient) => drizzle(postgresClient.pool, { schema }),
 };
 {%- endif %}

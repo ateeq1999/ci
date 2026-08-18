@@ -4,5 +4,5 @@ export const PRISMA = Symbol("PRISMA");
 export const TYPEORM = Symbol("TYPEORM");
 {%- else -%}
 export const DRIZZLE = Symbol("DRIZZLE");
-export const POSTGRES_CLIENT = Symbol("POSTGRES_CLIENT");
+export const DB_CLIENT = Symbol("DB_CLIENT");
 {%- endif %}

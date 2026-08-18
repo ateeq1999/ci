@@ -139,7 +139,7 @@ fn includes_every_expected_file() {
         "src/database/database.module.ts",
         "src/database/schema/index.ts",
         "src/database/schema/users.ts",
-        "src/database/postgres-client.provider.ts",
+        "src/database/database-client.provider.ts",
         "drizzle.config.ts",
     ] {
         assert!(
@@ -176,7 +176,7 @@ fn drizzle_is_the_default_orm_and_pulls_in_schema_folder() {
 
     assert!(provider.contains("drizzle-orm/node-postgres"));
     assert!(provider.contains("databaseProvider"));
-    assert!(provider.contains("POSTGRES_CLIENT"));
+    assert!(provider.contains("DB_CLIENT"));
     assert!(provider.contains("provide: DRIZZLE"));
     assert!(!provider.contains("{%"));
 
@@ -185,22 +185,22 @@ fn drizzle_is_the_default_orm_and_pulls_in_schema_folder() {
         .find(|(path, _)| path == Path::new("src/database/database.constants.ts"))
         .expect("database.constants.ts should be present");
     assert!(constants.contains("Symbol(\"DRIZZLE\")"));
-    assert!(constants.contains("Symbol(\"POSTGRES_CLIENT\")"));
+    assert!(constants.contains("Symbol(\"DB_CLIENT\")"));
     assert!(!constants.contains("{%"));
 
     let (_, postgres_client) = files
         .iter()
-        .find(|(path, _)| path == Path::new("src/database/postgres-client.provider.ts"))
-        .expect("postgres-client.provider.ts should be present");
+        .find(|(path, _)| path == Path::new("src/database/database-client.provider.ts"))
+        .expect("database-client.provider.ts should be present");
     assert!(postgres_client.contains("onApplicationShutdown"));
-    assert!(postgres_client.contains("postgresClientProvider"));
-    assert!(postgres_client.contains("provide: POSTGRES_CLIENT"));
+    assert!(postgres_client.contains("databaseClientProvider"));
+    assert!(postgres_client.contains("provide: DB_CLIENT"));
 
     let (_, module) = files
         .iter()
         .find(|(path, _)| path == Path::new("src/database/database.module.ts"))
         .expect("database.module.ts should be present");
-    assert!(module.contains("postgresClientProvider"));
+    assert!(module.contains("databaseClientProvider"));
     assert!(module.contains("exports: [DRIZZLE]"));
     assert!(!module.contains("{%"));
 
@@ -264,8 +264,8 @@ fn postgres_js_driver_switches_drivers_throughout() {
 
     let (_, postgres_client) = files
         .iter()
-        .find(|(path, _)| path == Path::new("src/database/postgres-client.provider.ts"))
-        .expect("postgres-client.provider.ts should be present");
+        .find(|(path, _)| path == Path::new("src/database/database-client.provider.ts"))
+        .expect("database-client.provider.ts should be present");
     assert!(postgres_client.contains("import postgres"));
     assert!(postgres_client.contains("sql.end()"));
     assert!(!postgres_client.contains("{%"));

@@ -6,14 +6,14 @@ import { PRISMA } from "./database.constants";
 import { TYPEORM } from "./database.constants";
 {%- else %}
 import { DRIZZLE } from "./database.constants";
-import { postgresClientProvider } from "./postgres-client.provider";
+import { databaseClientProvider } from "./database-client.provider";
 {%- endif %}
 
 @Global()
 @Module({
   providers: [
 {%- if db_orm == "drizzle" %}
-    postgresClientProvider,
+    databaseClientProvider,
 {%- endif %}
     databaseProvider,
   ],

@@ -1,6 +1,6 @@
 import { Logger, type OnApplicationShutdown, type Provider } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { POSTGRES_CLIENT } from "./database.constants";
+import { DB_CLIENT } from "./database.constants";
 {%- if db_driver == "postgres-js" %}
 import postgres, { type Sql } from "postgres";
 
@@ -18,8 +18,8 @@ export class PostgresClient implements OnApplicationShutdown {
   }
 }
 
-export const postgresClientProvider: Provider = {
-  provide: POSTGRES_CLIENT,
+export const databaseClientProvider: Provider = {
+  provide: DB_CLIENT,
   inject: [ConfigService],
   useFactory: (config: ConfigService) => {
     const connectionString = config.getOrThrow<string>("DATABASE_URL");
@@ -42,8 +42,8 @@ export class PostgresClient implements OnApplicationShutdown {
   }
 }
 
-export const postgresClientProvider: Provider = {
-  provide: POSTGRES_CLIENT,
+export const databaseClientProvider: Provider = {
+  provide: DB_CLIENT,
   inject: [ConfigService],
   useFactory: (config: ConfigService) => {
     const connectionString = config.getOrThrow<string>("DATABASE_URL");
