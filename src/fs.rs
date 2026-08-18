@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use anyhow::{Context, Result};
 
@@ -23,10 +24,14 @@ impl FileSystem for RealFileSystem {
 
 // Only exercised by #[cfg(test)] code in this and other modules; `cargo build`
 // alone can't see those call sites.
+// `written` is `Rc<RefCell<..>>` (not plain `RefCell<..>`) so tests can hold
+// a cloned handle after the `InMemoryFileSystem` itself is moved into a
+// `Box<dyn FileSystem>`, and still observe writes made through the trait
+// object.
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Default)]
 pub struct InMemoryFileSystem {
-    pub written: RefCell<HashMap<PathBuf, String>>,
+    pub written: Rc<RefCell<HashMap<PathBuf, String>>>,
 }
 
 impl FileSystem for InMemoryFileSystem {
@@ -39,18 +44,4 @@ impl FileSystem for InMemoryFileSystem {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn in_memory_file_system_records_writes() {
-        let fs = InMemoryFileSystem::default();
-        fs.write_file(Path::new("project/package.json"), "{}")
-            .unwrap();
-
-        assert_eq!(
-            fs.written.borrow().get(Path::new("project/package.json")),
-            Some(&"{}".to_string())
-        );
-    }
-}
+mod tests;

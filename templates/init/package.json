@@ -1,9 +1,12 @@
 {
   "name": "{{project_name}}",
-  "version": "0.0.1",
+  "version": "{{package_version}}",
   "description": "",
   "private": true,
   "license": "UNLICENSED",
+  "engines": {
+    "node": "{{node_engine_range}}"
+  },
   "scripts": {
     "build": "nest build",
     "start": "nest start",
