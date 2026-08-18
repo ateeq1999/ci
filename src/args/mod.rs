@@ -1,4 +1,4 @@
-use clap::{ArgAction, Parser, Subcommand};
+use clap::{ArgAction, CommandFactory, Parser, Subcommand};
 
 use crate::commands::{db, init, update};
 
@@ -14,6 +14,13 @@ pub struct Cli {
     #[arg(short = 'v', long = "version", action = ArgAction::Version)]
     version: (),
 
+    /// Print every command, subcommand, and flag in one tree, then exit.
+    /// Checked before normal parsing, so it works with no subcommand given
+    /// (unlike `--help`, which needs one).
+    #[arg(long = "help-all", global = true)]
+    #[allow(dead_code)]
+    help_all: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -26,4 +33,50 @@ pub enum Commands {
     Update(update::Args),
     /// Run database migration commands (see db.md)
     Db(db::Args),
+}
+
+/// Checked directly against `std::env::args()` by `main`, before
+/// `Cli::parse()` — parsing would otherwise fail on `ci --help-all` alone
+/// (`command` is a required subcommand) or ignore the flag if it's not
+/// itself what triggers the exit.
+pub fn wants_help_all() -> bool {
+    std::env::args().any(|a| a == "--help-all")
+}
+
+/// Prints every command, subcommand, and flag as one indented tree.
+pub fn print_full_help() {
+    print_command_tree(&Cli::command(), 0);
+}
+
+fn print_command_tree(cmd: &clap::Command, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let about = cmd.get_about().map(ToString::to_string).unwrap_or_default();
+    println!("{indent}{} — {about}", cmd.get_name());
+
+    for arg in cmd.get_arguments() {
+        let id = arg.get_id().as_str();
+        if id == "help" || id == "version" || id == "help_all" {
+            continue;
+        }
+        let flag = if arg.is_positional() {
+            format!("<{}>", arg.get_id())
+        } else {
+            let short = arg.get_short().map(|c| format!("-{c}"));
+            let long = arg.get_long().map(|l| format!("--{l}"));
+            [short, long].into_iter().flatten().collect::<Vec<_>>().join(", ")
+        };
+        if flag.is_empty() {
+            continue;
+        }
+        let help = arg.get_help().map(ToString::to_string).unwrap_or_default();
+        println!("{indent}    {flag:<20} {help}");
+    }
+
+    for sub in cmd.get_subcommands() {
+        if sub.get_name() == "help" {
+            continue;
+        }
+        println!();
+        print_command_tree(sub, depth + 1);
+    }
 }

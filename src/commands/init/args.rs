@@ -8,6 +8,7 @@ pub struct Args {
     /// Project directory / name
     pub name: Option<String>,
 
+    /// Package manager to run `install` with
     #[arg(long, value_enum, default_value = "npm")]
     #[serde(default)]
     pub package_manager: PackageManager,
