@@ -4,7 +4,7 @@ mod shared;
 
 use args::Cli;
 use clap::Parser;
-use shared::ui;
+use shared::context::Context;
 
 fn main() {
     if args::wants_help_all() {
@@ -13,9 +13,9 @@ fn main() {
     }
 
     let cli = Cli::parse();
+    let ctx = Context::real();
 
-    if let Err(err) = commands::run(&cli) {
-        ui::error(&format!("{err:#}"));
+    if commands::run(&cli, &ctx).is_err() {
         std::process::exit(1);
     }
 }

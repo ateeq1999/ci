@@ -1,5 +1,6 @@
 mod args;
 mod detect;
+mod listeners;
 
 use std::path::Path;
 
@@ -10,7 +11,7 @@ use args::{Command, MigrateAction};
 
 use crate::shared::context::Context;
 use crate::shared::db_orm::{DbOrm, DrizzleDriver};
-use crate::shared::ui;
+use crate::shared::events::Updates;
 
 /// Drops and recreates `public` (every app table), plus drops the
 /// `drizzle` schema drizzle-kit's `migrate` command keeps its
@@ -52,104 +53,104 @@ const postgres = require("postgres");
 pub fn run(args: &Args, ctx: &Context) -> Result<()> {
     let root = std::env::current_dir()?;
     let is_production = std::env::var("NODE_ENV").as_deref() == Ok("production");
+    let bus = listeners::bus(ctx);
 
     match &args.command {
-        Command::Init(run_args) => {
+        Command::Init(run_args) => bus.run("db init", |events| {
             let detected = detect::detect(ctx, &root, run_args.orm)?;
-            ui::step(&format!(
+            events.updated(format!(
                 "Setting up the database ({})",
                 detected.orm.as_str()
             ));
-            init(ctx, &root, detected.orm)?;
-            ui::success("Database initialized");
-            Ok(())
-        }
-        Command::Migrate(migrate_args) => {
-            let detected = detect::detect(ctx, &root, migrate_args.orm)?;
-            match &migrate_args.action {
-                None => {
-                    ui::step(&format!(
-                        "Applying pending migrations ({})",
-                        detected.orm.as_str()
-                    ));
-                    migrate(ctx, &root, detected.orm)?;
-                    ui::success("Migrations applied");
-                    Ok(())
-                }
-                Some(MigrateAction::Fresh(a)) => {
-                    guard_destructive(
-                        "drop all tables and re-run every migration",
-                        a.yes,
-                        a.force,
-                        is_production,
-                    )?;
-                    ui::step(&format!(
-                        "Dropping and rebuilding the database ({})",
-                        detected.orm.as_str()
-                    ));
-                    migrate_fresh(ctx, &root, detected.orm, detected.driver)?;
-                    ui::success("Database is fresh");
-                    Ok(())
-                }
-                Some(MigrateAction::Refresh(a)) => {
-                    guard_destructive(
-                        "roll back and re-apply every migration",
-                        a.yes,
-                        a.force,
-                        is_production,
-                    )?;
-                    ui::step(&format!(
-                        "Refreshing the database ({})",
-                        detected.orm.as_str()
-                    ));
-                    migrate_refresh(ctx, &root, detected.orm, detected.driver)?;
-                    ui::success("Database refreshed");
-                    Ok(())
-                }
-                Some(MigrateAction::Rollback(a)) => {
-                    guard_destructive(
-                        &format!("roll back the last {} migration(s)", a.step),
-                        a.yes,
-                        a.force,
-                        is_production,
-                    )?;
-                    ui::step(&format!(
-                        "Rolling back {} migration(s) ({})",
-                        a.step,
-                        detected.orm.as_str()
-                    ));
-                    migrate_rollback(ctx, &root, detected.orm, a.step)?;
-                    ui::success(&format!("Rolled back {} migration(s)", a.step));
-                    Ok(())
-                }
-            }
-        }
-        Command::Seed(run_args) => {
+            init(ctx, &root, detected.orm, events)?;
+            Ok("Database initialized".to_string())
+        }),
+        Command::Migrate(migrate_args) => match &migrate_args.action {
+            None => bus.run("db migrate", |events| {
+                let detected = detect::detect(ctx, &root, migrate_args.orm)?;
+                events.updated(format!(
+                    "Applying pending migrations ({})",
+                    detected.orm.as_str()
+                ));
+                migrate(ctx, &root, detected.orm)?;
+                Ok("Migrations applied".to_string())
+            }),
+            Some(MigrateAction::Fresh(a)) => bus.run("db migrate fresh", |events| {
+                guard_destructive(
+                    events,
+                    "drop all tables and re-run every migration",
+                    a.yes,
+                    a.force,
+                    is_production,
+                )?;
+                let detected = detect::detect(ctx, &root, migrate_args.orm)?;
+                events.updated(format!(
+                    "Dropping and rebuilding the database ({})",
+                    detected.orm.as_str()
+                ));
+                migrate_fresh(ctx, &root, detected.orm, detected.driver, events)?;
+                Ok("Database is fresh".to_string())
+            }),
+            Some(MigrateAction::Refresh(a)) => bus.run("db migrate refresh", |events| {
+                guard_destructive(
+                    events,
+                    "roll back and re-apply every migration",
+                    a.yes,
+                    a.force,
+                    is_production,
+                )?;
+                let detected = detect::detect(ctx, &root, migrate_args.orm)?;
+                events.updated(format!(
+                    "Refreshing the database ({})",
+                    detected.orm.as_str()
+                ));
+                migrate_refresh(ctx, &root, detected.orm, detected.driver, events)?;
+                Ok("Database refreshed".to_string())
+            }),
+            Some(MigrateAction::Rollback(a)) => bus.run("db migrate rollback", |events| {
+                guard_destructive(
+                    events,
+                    &format!("roll back the last {} migration(s)", a.step),
+                    a.yes,
+                    a.force,
+                    is_production,
+                )?;
+                let detected = detect::detect(ctx, &root, migrate_args.orm)?;
+                events.updated(format!(
+                    "Rolling back {} migration(s) ({})",
+                    a.step,
+                    detected.orm.as_str()
+                ));
+                migrate_rollback(ctx, &root, detected.orm, a.step, events)?;
+                Ok(format!("Rolled back {} migration(s)", a.step))
+            }),
+        },
+        Command::Seed(run_args) => bus.run("db seed", |_events| {
             detect::detect(ctx, &root, run_args.orm)?;
             bail!(
                 "`ci db seed` isn't implemented yet — no seed script template exists for \
                  any ORM yet. See db.md's Gap 2/3."
             )
-        }
+        }),
     }
 }
 
-fn init(ctx: &Context, root: &Path, orm: DbOrm) -> Result<()> {
+fn init(ctx: &Context, root: &Path, orm: DbOrm, events: &Updates) -> Result<()> {
     match orm {
         DbOrm::Drizzle => {
-            ui::step("Generating the initial migration");
+            events.updated("Generating the initial migration");
             ctx.commands
                 .run("npx", &["drizzle-kit", "generate"], root)?;
-            ui::step("Applying migrations");
+            events.updated("Applying migrations");
             ctx.commands.run("npx", &["drizzle-kit", "migrate"], root)
         }
         DbOrm::Prisma => {
-            ui::step("Creating and applying the initial migration");
+            events.updated("Creating and applying the initial migration");
             ctx.commands
                 .run("npx", &["prisma", "migrate", "dev", "--name", "init"], root)
         }
         DbOrm::Typeorm => {
-            ui::step("Generating the initial migration");
+            events.updated("Generating the initial migration");
             ctx.commands.run(
                 "npx",
                 &[
@@ -161,7 +162,7 @@ fn init(ctx: &Context, root: &Path, orm: DbOrm) -> Result<()> {
                 ],
                 root,
             )?;
-            ui::step("Applying migrations");
+            events.updated("Applying migrations");
             ctx.commands.run(
                 "npx",
                 &[
@@ -226,8 +227,13 @@ fn read_database_url(ctx: &Context, root: &Path) -> Result<String> {
 /// `push`/`pull`/`studio`/`check`/`up`/`export`, nothing that touches
 /// existing tables destructively), so this connects directly with
 /// whichever driver the project is configured for.
-fn drop_drizzle_schema(ctx: &Context, root: &Path, driver: DrizzleDriver) -> Result<()> {
-    ui::step("Dropping existing tables and migration history");
+fn drop_drizzle_schema(
+    ctx: &Context,
+    root: &Path,
+    driver: DrizzleDriver,
+    events: &Updates,
+) -> Result<()> {
+    events.updated("Dropping existing tables and migration history");
     let database_url = read_database_url(ctx, root)?;
     let script = match driver {
         DrizzleDriver::Pg => PG_DROP_SCRIPT,
@@ -240,23 +246,29 @@ fn drop_drizzle_schema(ctx: &Context, root: &Path, driver: DrizzleDriver) -> Res
     )
 }
 
-fn migrate_fresh(ctx: &Context, root: &Path, orm: DbOrm, driver: DrizzleDriver) -> Result<()> {
+fn migrate_fresh(
+    ctx: &Context,
+    root: &Path,
+    orm: DbOrm,
+    driver: DrizzleDriver,
+    events: &Updates,
+) -> Result<()> {
     match orm {
         DbOrm::Drizzle => {
-            drop_drizzle_schema(ctx, root, driver)?;
-            ui::step("Regenerating the migration");
+            drop_drizzle_schema(ctx, root, driver, events)?;
+            events.updated("Regenerating the migration");
             ctx.commands
                 .run("npx", &["drizzle-kit", "generate"], root)?;
-            ui::step("Applying migrations");
+            events.updated("Applying migrations");
             ctx.commands.run("npx", &["drizzle-kit", "migrate"], root)
         }
         DbOrm::Prisma => {
-            ui::step("Resetting the database (drop, re-apply, re-seed)");
+            events.updated("Resetting the database (drop, re-apply, re-seed)");
             ctx.commands
                 .run("npx", &["prisma", "migrate", "reset", "--force"], root)
         }
         DbOrm::Typeorm => {
-            ui::step("Dropping the schema");
+            events.updated("Dropping the schema");
             ctx.commands.run(
                 "npx",
                 &[
@@ -267,7 +279,7 @@ fn migrate_fresh(ctx: &Context, root: &Path, orm: DbOrm, driver: DrizzleDriver) 
                 ],
                 root,
             )?;
-            ui::step("Applying migrations");
+            events.updated("Applying migrations");
             ctx.commands.run(
                 "npx",
                 &[
@@ -288,14 +300,20 @@ fn migrate_fresh(ctx: &Context, root: &Path, orm: DbOrm, driver: DrizzleDriver) 
 /// story for Drizzle: with no down-migration story at all, "roll back
 /// everything then re-apply" and "drop everything then re-apply" are the
 /// same operation, so it reuses `migrate_fresh`'s drop-and-rebuild.
-fn migrate_refresh(ctx: &Context, root: &Path, orm: DbOrm, driver: DrizzleDriver) -> Result<()> {
+fn migrate_refresh(
+    ctx: &Context,
+    root: &Path,
+    orm: DbOrm,
+    driver: DrizzleDriver,
+    events: &Updates,
+) -> Result<()> {
     match orm {
         DbOrm::Prisma => {
-            ui::step("Resetting the database (drop, re-apply, re-seed)");
+            events.updated("Resetting the database (drop, re-apply, re-seed)");
             ctx.commands
                 .run("npx", &["prisma", "migrate", "reset", "--force"], root)
         }
-        DbOrm::Drizzle => migrate_fresh(ctx, root, orm, driver),
+        DbOrm::Drizzle => migrate_fresh(ctx, root, orm, driver, events),
         DbOrm::Typeorm => bail!(
             "`ci db migrate refresh` isn't implemented for TypeORM yet — safely reverting \
              *all* migrations needs to know how many exist first; only \
@@ -304,12 +322,18 @@ fn migrate_refresh(ctx: &Context, root: &Path, orm: DbOrm, driver: DrizzleDriver
     }
 }
 
-fn migrate_rollback(ctx: &Context, root: &Path, orm: DbOrm, step: u32) -> Result<()> {
+fn migrate_rollback(
+    ctx: &Context,
+    root: &Path,
+    orm: DbOrm,
+    step: u32,
+    events: &Updates,
+) -> Result<()> {
     match orm {
         DbOrm::Typeorm => {
             for i in 1..=step {
                 if step > 1 {
-                    ui::step(&format!("Reverting migration {i}/{step}"));
+                    events.updated(format!("Reverting migration {i}/{step}"));
                 }
                 ctx.commands.run(
                     "npx",
@@ -335,12 +359,18 @@ fn migrate_rollback(ctx: &Context, root: &Path, orm: DbOrm, step: u32) -> Result
     }
 }
 
-fn guard_destructive(action: &str, yes: bool, force: bool, is_production: bool) -> Result<()> {
+fn guard_destructive(
+    events: &Updates,
+    action: &str,
+    yes: bool,
+    force: bool,
+    is_production: bool,
+) -> Result<()> {
     if is_production && !force {
         bail!("refusing to run `{action}` with NODE_ENV=production without --force");
     }
     if !yes {
-        ui::warn(&format!("This will {action}."));
+        events.warned(format!("This will {action}."));
         if !confirm("Continue?")? {
             bail!("aborted");
         }

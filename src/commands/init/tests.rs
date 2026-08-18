@@ -4,6 +4,39 @@ use super::args::{DbOrm, DrizzleDriver, PackageManager};
 use super::*;
 use crate::shared::context::NoopCommandRunner;
 use crate::shared::fs::InMemoryFileSystem;
+use crate::shared::ui::{ConsoleUi, RecordingUi};
+
+#[test]
+fn reports_progress_and_success_through_the_event_bus() {
+    let ui = RecordingUi::default();
+    let messages = ui.messages.clone();
+    let ctx = Context {
+        fs: Box::new(InMemoryFileSystem::default()),
+        commands: Box::new(NoopCommandRunner::default()),
+        ui: Box::new(ui),
+    };
+    let args = Args {
+        name: Some("my-api".into()),
+        package_manager: PackageManager::Npm,
+        orm: DbOrm::Drizzle,
+        driver: DrizzleDriver::Pg,
+        skip_install: true,
+        skip_git: true,
+    };
+
+    run(&args, &ctx).unwrap();
+
+    let messages = messages.borrow();
+    assert!(messages.iter().any(|m| m.starts_with("step: Scaffolding")));
+    assert!(
+        messages
+            .iter()
+            .any(|m| m == "success: Created NestJS project in my-api")
+    );
+    // Started fires but PrintAction renders nothing for it — the last
+    // message should be the success line, not something after it.
+    assert_eq!(messages.last().unwrap(), "success: Created NestJS project in my-api");
+}
 
 #[test]
 fn writes_starter_files_under_project_dir() {
@@ -12,6 +45,7 @@ fn writes_starter_files_under_project_dir() {
     let ctx = Context {
         fs: Box::new(fs),
         commands: Box::new(NoopCommandRunner::default()),
+        ui: Box::new(ConsoleUi),
     };
     let args = Args {
         name: Some("my-api".into()),
@@ -36,6 +70,7 @@ fn writes_ci_config_json_with_orm_and_driver() {
     let ctx = Context {
         fs: Box::new(fs),
         commands: Box::new(NoopCommandRunner::default()),
+        ui: Box::new(ConsoleUi),
     };
     let args = Args {
         name: Some("my-api".into()),
@@ -66,6 +101,7 @@ fn ci_config_json_omits_driver_for_non_drizzle_orms() {
     let ctx = Context {
         fs: Box::new(fs),
         commands: Box::new(NoopCommandRunner::default()),
+        ui: Box::new(ConsoleUi),
     };
     let args = Args {
         name: Some("my-api".into()),
@@ -92,6 +128,7 @@ fn errors_when_name_missing() {
     let ctx = Context {
         fs: Box::new(InMemoryFileSystem::default()),
         commands: Box::new(NoopCommandRunner::default()),
+        ui: Box::new(ConsoleUi),
     };
     let args = Args::default();
 
@@ -106,6 +143,7 @@ fn skips_git_and_install_when_requested() {
     let ctx = Context {
         fs: Box::new(InMemoryFileSystem::default()),
         commands: Box::new(commands),
+        ui: Box::new(ConsoleUi),
     };
     let args = Args {
         name: Some("my-api".into()),
@@ -128,6 +166,7 @@ fn runs_git_and_package_manager_install_by_default() {
     let ctx = Context {
         fs: Box::new(InMemoryFileSystem::default()),
         commands: Box::new(commands),
+        ui: Box::new(ConsoleUi),
     };
     let args = Args {
         name: Some("my-api".into()),

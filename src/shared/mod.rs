@@ -4,6 +4,7 @@
 
 pub mod context;
 pub mod db_orm;
+pub mod events;
 pub mod fs;
 pub mod json_payload;
 pub mod ui;

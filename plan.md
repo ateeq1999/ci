@@ -1,5 +1,20 @@
 # Plan: event-driven command output — `Ui` + lifecycle `EventBus`, both DI'd
 
+## Status: shipped
+
+Implemented as designed below. `src/shared/events.rs`
+(`Event`/`Action`/`EventBus`/`Updates`/`PrintAction`), `src/shared/ui.rs`
+trimmed to `Ui`/`ConsoleUi`/`RecordingUi`, `Context` gained `ui`, one
+`listeners.rs` per command (`init`/`update`/`db`), every `run()` reshaped
+into `listeners::bus(ctx).run("<tag>", |events| { ... })`. `db` uses the
+specific-tag form from "Open question" below (`"db init"`, `"db migrate"`,
+`"db migrate fresh"`, `"db migrate refresh"`, `"db migrate rollback"`,
+`"db seed"`), not one flat `"db"` tag. Verified: 47 tests passing (two new
+ones exercise `RecordingUi` — asserting `init` reports progress/success,
+and that `db migrate fresh` warns before its confirmation prompt), plus a
+real run against a throwaway Postgres container confirming output is
+unchanged end to end.
+
 Supersedes the previous versions of this file. Three decisions now locked
 in:
 

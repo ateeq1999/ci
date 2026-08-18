@@ -5,6 +5,7 @@ use std::rc::Rc;
 use anyhow::{bail, Context as _, Result};
 
 use super::fs::{FileSystem, RealFileSystem};
+use super::ui::{ConsoleUi, Ui};
 
 /// Runs an external command (e.g. `git`, `npm`) in a given directory.
 /// Abstracted so commands never call `std::process::Command` directly.
@@ -60,6 +61,7 @@ impl CommandRunner for NoopCommandRunner {
 pub struct Context {
     pub fs: Box<dyn FileSystem>,
     pub commands: Box<dyn CommandRunner>,
+    pub ui: Box<dyn Ui>,
 }
 
 impl Context {
@@ -67,6 +69,7 @@ impl Context {
         Self {
             fs: Box::new(RealFileSystem),
             commands: Box::new(RealCommandRunner),
+            ui: Box::new(ConsoleUi),
         }
     }
 }

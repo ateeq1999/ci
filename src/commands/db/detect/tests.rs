@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use super::*;
 use crate::shared::context::NoopCommandRunner;
 use crate::shared::fs::InMemoryFileSystem;
+use crate::shared::ui::ConsoleUi;
 
 fn ctx_with_files(files: &[(&str, &str)]) -> Context {
     let fs = InMemoryFileSystem::default();
@@ -14,6 +15,7 @@ fn ctx_with_files(files: &[(&str, &str)]) -> Context {
     Context {
         fs: Box::new(fs),
         commands: Box::new(NoopCommandRunner::default()),
+        ui: Box::new(ConsoleUi),
     }
 }
 

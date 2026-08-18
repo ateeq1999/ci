@@ -1,7 +1,9 @@
 use super::args::{Command, DestructiveArgs, MigrateAction, MigrateArgs, RollbackArgs, RunArgs};
 use super::*;
 use crate::shared::context::NoopCommandRunner;
+use crate::shared::events::{EventBus, PrintAction};
 use crate::shared::fs::InMemoryFileSystem;
+use crate::shared::ui::{ConsoleUi, RecordingUi};
 
 fn ctx() -> (Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
     let commands = NoopCommandRunner::default();
@@ -10,6 +12,7 @@ fn ctx() -> (Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
         Context {
             fs: Box::new(InMemoryFileSystem::default()),
             commands: Box::new(commands),
+            ui: Box::new(ConsoleUi),
         },
         calls,
     )
@@ -34,6 +37,7 @@ fn ctx_with_database_url(url: &str) -> (Context, std::rc::Rc<std::cell::RefCell<
         Context {
             fs: Box::new(fs),
             commands: Box::new(commands),
+            ui: Box::new(ConsoleUi),
         },
         calls,
     )
@@ -203,7 +207,10 @@ fn migrate_fresh_drizzle_drops_schema_then_regenerates() {
     let calls = calls.borrow();
     assert_eq!(calls.len(), 3);
     assert!(calls[0].starts_with("node -e"));
-    assert!(calls[0].contains("require(\"pg\")"), "should use the pg driver by default");
+    assert!(
+        calls[0].contains("require(\"pg\")"),
+        "should use the pg driver by default"
+    );
     assert!(calls[0].contains("postgres://user:pass@localhost:5432/my_api"));
     assert!(calls[0].contains("DROP SCHEMA IF EXISTS public CASCADE"));
     assert!(calls[0].contains("DROP SCHEMA IF EXISTS drizzle CASCADE"));
@@ -228,6 +235,7 @@ fn migrate_fresh_drizzle_postgres_js_driver_uses_the_postgres_js_script() {
     let ctx = Context {
         fs: Box::new(fs),
         commands: Box::new(commands),
+        ui: Box::new(ConsoleUi),
     };
 
     run(
@@ -335,12 +343,9 @@ fn migrate_rollback_typeorm_reverts_step_times() {
     .unwrap();
 
     assert_eq!(calls.borrow().len(), 3);
-    assert!(
-        calls
-            .borrow()
-            .iter()
-            .all(|c| c == "npx typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts")
-    );
+    assert!(calls.borrow().iter().all(
+        |c| c == "npx typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts"
+    ));
 }
 
 #[test]
@@ -379,18 +384,70 @@ fn seed_is_not_implemented_for_any_orm() {
 }
 
 #[test]
+fn migrate_fresh_warns_before_the_confirmation_prompt() {
+    let ui = RecordingUi::default();
+    let messages = ui.messages.clone();
+    let ctx = Context {
+        fs: Box::new(InMemoryFileSystem::default()),
+        commands: Box::new(NoopCommandRunner::default()),
+        ui: Box::new(ui),
+    };
+
+    // No --yes: `confirm()` reads stdin, which under `cargo test` hits EOF
+    // immediately rather than blocking, answering "no" and aborting — the
+    // point of this test is only that the warning fired first.
+    let _ = run(
+        &Args {
+            command: Command::Migrate(migrate_args(
+                DbOrm::Prisma,
+                Some(MigrateAction::Fresh(DestructiveArgs {
+                    yes: false,
+                    force: false,
+                })),
+            )),
+        },
+        &ctx,
+    );
+
+    let messages = messages.borrow();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.starts_with("warn: This will drop all tables"))
+    );
+    assert!(messages.iter().any(|m| m.starts_with("error:")));
+}
+
+// `guard_destructive` takes `&Updates`, which is only ever handed out
+// inside `EventBus::run`'s closure — so testing it means going through
+// `.run(...)` for real, the same path production uses.
+fn with_bus<T>(f: impl FnOnce(&crate::shared::events::Updates) -> Result<T>) -> Result<T> {
+    let ui = ConsoleUi;
+    let bus = EventBus::new(vec![Box::new(PrintAction::new(&ui))]);
+    let mut out = None;
+    bus.run("test", |events| {
+        out = Some(f(events)?);
+        Ok(String::new())
+    })?;
+    Ok(out.expect("closure ran on Ok"))
+}
+
+#[test]
 fn guard_destructive_refuses_production_without_force() {
-    let err = guard_destructive("do a dangerous thing", true, false, true).unwrap_err();
+    let err =
+        with_bus(|events| guard_destructive(events, "do a dangerous thing", true, false, true))
+            .unwrap_err();
     assert!(err.to_string().contains("NODE_ENV=production"));
 }
 
 #[test]
 fn guard_destructive_allows_production_with_force() {
-    guard_destructive("do a dangerous thing", true, true, true).unwrap();
+    with_bus(|events| guard_destructive(events, "do a dangerous thing", true, true, true)).unwrap();
 }
 
 #[test]
 fn guard_destructive_skips_prompt_when_yes_is_set() {
     // If this didn't skip the confirmation prompt, it would block on stdin.
-    guard_destructive("do a dangerous thing", true, false, false).unwrap();
+    with_bus(|events| guard_destructive(events, "do a dangerous thing", true, false, false))
+        .unwrap();
 }
