@@ -82,7 +82,7 @@ fn runs_git_and_package_manager_install_by_default() {
 
 #[test]
 fn substitutes_all_placeholders_into_package_json() {
-    let files = templates::starter_files("my-api");
+    let files = templates::starter_files("my-api").unwrap();
     let (_, package_json) = files
         .iter()
         .find(|(path, _)| path == Path::new("package.json"))
@@ -99,7 +99,7 @@ fn substitutes_all_placeholders_into_package_json() {
 
 #[test]
 fn substitutes_schema_url_into_nest_cli_json() {
-    let files = templates::starter_files("my-api");
+    let files = templates::starter_files("my-api").unwrap();
     let (_, nest_cli_json) = files
         .iter()
         .find(|(path, _)| path == Path::new("nest-cli.json"))
@@ -110,7 +110,7 @@ fn substitutes_schema_url_into_nest_cli_json() {
 
 #[test]
 fn includes_every_expected_file() {
-    let files = templates::starter_files("my-api");
+    let files = templates::starter_files("my-api").unwrap();
     let paths: Vec<_> = files.iter().map(|(p, _)| p.clone()).collect();
 
     for expected in [

@@ -1,5 +1,9 @@
 use std::path::PathBuf;
 
+use anyhow::Result;
+use atom_engine::Atom;
+use serde_json::json;
+
 use super::config;
 
 /// (relative path, template contents) pairs for the minimal NestJS starter.
@@ -50,16 +54,25 @@ const FILES: &[(&str, &str)] = &[
 
 /// Returns the starter project's files with substitution placeholders
 /// (`{{project_name}}`, `{{package_version}}`, ...) filled in.
-pub fn starter_files(project_name: &str) -> Vec<(PathBuf, String)> {
+pub fn starter_files(project_name: &str) -> Result<Vec<(PathBuf, String)>> {
+    let mut engine = Atom::new();
+    let ctx = json!({
+        "project_name": project_name,
+        "package_version": config::STARTER_PACKAGE_VERSION,
+        "node_engine_range": config::NODE_ENGINE_RANGE,
+        "nest_cli_schema_url": config::NEST_CLI_SCHEMA_URL,
+    });
+
     FILES
         .iter()
         .map(|(path, contents)| {
-            let rendered = contents
-                .replace("{{project_name}}", project_name)
-                .replace("{{package_version}}", config::STARTER_PACKAGE_VERSION)
-                .replace("{{node_engine_range}}", config::NODE_ENGINE_RANGE)
-                .replace("{{nest_cli_schema_url}}", config::NEST_CLI_SCHEMA_URL);
-            (PathBuf::from(path), rendered)
+            engine
+                .add_template(path, contents)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            let rendered = engine
+                .render(path, &ctx)
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+            Ok((PathBuf::from(*path), rendered))
         })
         .collect()
 }
