@@ -1,13 +1,10 @@
 mod args;
 mod commands;
-mod context;
-mod db_orm;
-mod fs;
-mod json_payload;
-mod ui;
+mod shared;
 
 use args::Cli;
 use clap::Parser;
+use shared::ui;
 
 fn main() {
     if args::wants_help_all() {

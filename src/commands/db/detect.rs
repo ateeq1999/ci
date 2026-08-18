@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{bail, Context as _, Result};
 use serde::Deserialize;
 
-use crate::context::Context;
-use crate::db_orm::{DbOrm, DrizzleDriver};
+use crate::shared::context::Context;
+use crate::shared::db_orm::{DbOrm, DrizzleDriver};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]

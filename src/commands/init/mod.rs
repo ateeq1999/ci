@@ -9,8 +9,8 @@ use anyhow::{Context as _, Result};
 
 pub use args::Args;
 
-use crate::context::Context;
-use crate::ui;
+use crate::shared::context::Context;
+use crate::shared::ui;
 
 pub fn run(args: &Args, ctx: &Context) -> Result<()> {
     let name = args

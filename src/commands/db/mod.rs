@@ -8,9 +8,9 @@ use anyhow::{Result, bail};
 pub use args::Args;
 use args::{Command, MigrateAction};
 
-use crate::context::Context;
-use crate::db_orm::{DbOrm, DrizzleDriver};
-use crate::ui;
+use crate::shared::context::Context;
+use crate::shared::db_orm::{DbOrm, DrizzleDriver};
+use crate::shared::ui;
 
 /// Drops and recreates `public` (every app table), plus drops the
 /// `drizzle` schema drizzle-kit's `migrate` command keeps its

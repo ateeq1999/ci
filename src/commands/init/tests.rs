@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use super::args::{DbOrm, DrizzleDriver, PackageManager};
 use super::*;
-use crate::context::NoopCommandRunner;
-use crate::fs::InMemoryFileSystem;
+use crate::shared::context::NoopCommandRunner;
+use crate::shared::fs::InMemoryFileSystem;
 
 #[test]
 fn writes_starter_files_under_project_dir() {

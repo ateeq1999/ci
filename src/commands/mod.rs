@@ -3,8 +3,8 @@ pub mod init;
 pub mod update;
 
 use crate::args::{Cli, Commands};
-use crate::context::Context;
-use crate::json_payload;
+use crate::shared::context::Context;
+use crate::shared::json_payload;
 
 pub fn run(cli: &Cli) -> anyhow::Result<()> {
     let ctx = Context::real();

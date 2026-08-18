@@ -6,7 +6,7 @@ use self_update::cargo_crate_version;
 
 pub use args::Args;
 
-use crate::ui;
+use crate::shared::ui;
 
 const REPO_OWNER: &str = "ateeq1999";
 const REPO_NAME: &str = "ci";

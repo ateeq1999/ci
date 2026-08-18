@@ -4,7 +4,7 @@ use std::rc::Rc;
 
 use anyhow::{bail, Context as _, Result};
 
-use crate::fs::{FileSystem, RealFileSystem};
+use super::fs::{FileSystem, RealFileSystem};
 
 /// Runs an external command (e.g. `git`, `npm`) in a given directory.
 /// Abstracted so commands never call `std::process::Command` directly.

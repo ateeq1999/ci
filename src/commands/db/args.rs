@@ -1,6 +1,6 @@
 use clap::{Args as ClapArgs, Subcommand};
 
-use crate::db_orm::DbOrm;
+use crate::shared::db_orm::DbOrm;
 
 #[derive(ClapArgs, Clone, Debug)]
 pub struct Args {

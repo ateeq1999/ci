@@ -1,7 +1,7 @@
 use clap::{Args as ClapArgs, ValueEnum};
 use serde::{Deserialize, Serialize};
 
-pub use crate::db_orm::{DbOrm, DrizzleDriver};
+pub use crate::shared::db_orm::{DbOrm, DrizzleDriver};
 
 #[derive(ClapArgs, Deserialize, Clone, Debug, Default)]
 pub struct Args {

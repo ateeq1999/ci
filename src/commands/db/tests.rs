@@ -1,7 +1,7 @@
 use super::args::{Command, DestructiveArgs, MigrateAction, MigrateArgs, RollbackArgs, RunArgs};
 use super::*;
-use crate::context::NoopCommandRunner;
-use crate::fs::InMemoryFileSystem;
+use crate::shared::context::NoopCommandRunner;
+use crate::shared::fs::InMemoryFileSystem;
 
 fn ctx() -> (Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
     let commands = NoopCommandRunner::default();
