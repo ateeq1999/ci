@@ -30,6 +30,64 @@ fn writes_starter_files_under_project_dir() {
 }
 
 #[test]
+fn writes_ci_config_json_with_orm_and_driver() {
+    let fs = InMemoryFileSystem::default();
+    let written = fs.written.clone();
+    let ctx = Context {
+        fs: Box::new(fs),
+        commands: Box::new(NoopCommandRunner::default()),
+    };
+    let args = Args {
+        name: Some("my-api".into()),
+        package_manager: PackageManager::Pnpm,
+        orm: DbOrm::Drizzle,
+        driver: DrizzleDriver::PostgresJs,
+        skip_install: true,
+        skip_git: true,
+    };
+
+    run(&args, &ctx).unwrap();
+
+    let written = written.borrow();
+    let config = written
+        .get(Path::new("my-api/ci/config.json"))
+        .expect("ci/config.json should be written");
+    let parsed: serde_json::Value = serde_json::from_str(config).unwrap();
+    assert_eq!(parsed["orm"], "drizzle");
+    assert_eq!(parsed["driver"], "postgres-js");
+    assert_eq!(parsed["packageManager"], "pnpm");
+    assert_eq!(parsed["ciVersion"], env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn ci_config_json_omits_driver_for_non_drizzle_orms() {
+    let fs = InMemoryFileSystem::default();
+    let written = fs.written.clone();
+    let ctx = Context {
+        fs: Box::new(fs),
+        commands: Box::new(NoopCommandRunner::default()),
+    };
+    let args = Args {
+        name: Some("my-api".into()),
+        package_manager: PackageManager::Npm,
+        orm: DbOrm::Prisma,
+        driver: DrizzleDriver::Pg,
+        skip_install: true,
+        skip_git: true,
+    };
+
+    run(&args, &ctx).unwrap();
+
+    let written = written.borrow();
+    let config = written
+        .get(Path::new("my-api/ci/config.json"))
+        .expect("ci/config.json should be written");
+    let parsed: serde_json::Value = serde_json::from_str(config).unwrap();
+    assert_eq!(parsed["orm"], "prisma");
+    assert!(parsed.get("driver").is_none());
+}
+
+#[test]
 fn errors_when_name_missing() {
     let ctx = Context {
         fs: Box::new(InMemoryFileSystem::default()),
@@ -320,4 +378,27 @@ fn typeorm_gets_neither_drizzle_schema_nor_prisma_schema() {
         .find(|(path, _)| path == Path::new("package.json"))
         .expect("package.json should be present");
     assert!(!package_json.contains("{%"));
+    assert!(package_json.contains("\"dotenv\":"));
+    assert!(package_json.contains("\"ts-node\":"));
+    assert!(package_json.contains("typeorm-ts-node-commonjs"));
+}
+
+#[test]
+fn typeorm_gets_a_standalone_data_source_for_the_cli() {
+    let files = templates::starter_files("my-api", DbOrm::Typeorm, DrizzleDriver::Pg).unwrap();
+
+    let (_, data_source) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/data-source.ts"))
+        .expect("data-source.ts should be present");
+    assert!(data_source.contains("new DataSource"));
+    assert!(data_source.contains("dotenv/config"));
+
+    let (_, provider) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/database/database.provider.ts"))
+        .expect("database.provider.ts should be present");
+    assert!(provider.contains("import { dataSource } from \"./data-source\""));
+    assert!(provider.contains("dataSource.initialize()"));
+    assert!(!provider.contains("{%"));
 }

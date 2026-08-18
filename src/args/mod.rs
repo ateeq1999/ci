@@ -1,6 +1,6 @@
 use clap::{ArgAction, Parser, Subcommand};
 
-use crate::commands::{init, update};
+use crate::commands::{db, init, update};
 
 #[derive(Parser)]
 #[command(name = "ci", author, version, about, long_about = None, disable_version_flag = true)]
@@ -24,4 +24,6 @@ pub enum Commands {
     Init(init::Args),
     /// Update this CLI to the latest release
     Update(update::Args),
+    /// Run database migration commands (see db.md)
+    Db(db::Args),
 }

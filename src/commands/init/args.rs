@@ -1,5 +1,7 @@
 use clap::{Args as ClapArgs, ValueEnum};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+
+pub use crate::db_orm::{DbOrm, DrizzleDriver};
 
 #[derive(ClapArgs, Deserialize, Clone, Debug, Default)]
 pub struct Args {
@@ -31,7 +33,7 @@ pub struct Args {
     pub skip_git: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, ValueEnum, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PackageManager {
     #[default]
@@ -46,42 +48,6 @@ impl PackageManager {
             PackageManager::Npm => "npm",
             PackageManager::Pnpm => "pnpm",
             PackageManager::Yarn => "yarn",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, ValueEnum, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DbOrm {
-    #[default]
-    Drizzle,
-    Typeorm,
-    Prisma,
-}
-
-impl DbOrm {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DbOrm::Drizzle => "drizzle",
-            DbOrm::Typeorm => "typeorm",
-            DbOrm::Prisma => "prisma",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, ValueEnum, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum DrizzleDriver {
-    #[default]
-    Pg,
-    PostgresJs,
-}
-
-impl DrizzleDriver {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            DrizzleDriver::Pg => "pg",
-            DrizzleDriver::PostgresJs => "postgres-js",
         }
     }
 }

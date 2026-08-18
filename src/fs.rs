@@ -7,6 +7,10 @@ use anyhow::{Context, Result};
 
 pub trait FileSystem {
     fn write_file(&self, path: &Path, contents: &str) -> Result<()>;
+
+    /// `Ok(None)` when the file doesn't exist; `Err` for any other read
+    /// failure (permissions, not valid UTF-8, ...).
+    fn try_read_to_string(&self, path: &Path) -> Result<Option<String>>;
 }
 
 pub struct RealFileSystem;
@@ -19,6 +23,14 @@ impl FileSystem for RealFileSystem {
         }
         std::fs::write(path, contents)
             .with_context(|| format!("failed to write file {}", path.display()))
+    }
+
+    fn try_read_to_string(&self, path: &Path) -> Result<Option<String>> {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => Ok(Some(contents)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("failed to read {}", path.display())),
+        }
     }
 }
 
@@ -40,6 +52,10 @@ impl FileSystem for InMemoryFileSystem {
             .borrow_mut()
             .insert(path.to_path_buf(), contents.to_string());
         Ok(())
+    }
+
+    fn try_read_to_string(&self, path: &Path) -> Result<Option<String>> {
+        Ok(self.written.borrow().get(path).cloned())
     }
 }
 

@@ -9,21 +9,11 @@ export const databaseProvider: Provider = {
 };
 {%- elif db_orm == "typeorm" %}
 import { TYPEORM } from "./database.constants";
-import { ConfigService } from "@nestjs/config";
-import { DataSource } from "typeorm";
+import { dataSource } from "./data-source";
 
 export const databaseProvider: Provider = {
   provide: TYPEORM,
-  inject: [ConfigService],
-  useFactory: (config: ConfigService) => {
-    const dataSource = new DataSource({
-      type: "postgres",
-      url: config.getOrThrow<string>("DATABASE_URL"),
-      entities: [],
-      synchronize: false,
-    });
-    return dataSource.initialize();
-  },
+  useFactory: () => dataSource.initialize(),
 };
 {%- elif db_driver == "postgres-js" %}
 import { drizzle } from "drizzle-orm/postgres-js";

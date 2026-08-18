@@ -14,7 +14,11 @@
     "start:prod": "node dist/main"{% if db_orm == "drizzle" %},
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
-    "db:migrate": "drizzle-kit migrate"{% endif %}
+    "db:migrate": "drizzle-kit migrate"{% elif db_orm == "typeorm" %},
+    "typeorm": "typeorm-ts-node-commonjs -d src/database/data-source.ts",
+    "db:generate": "npm run typeorm -- migration:generate src/database/migrations/migration",
+    "db:migrate": "npm run typeorm -- migration:run",
+    "db:rollback": "npm run typeorm -- migration:revert"{% endif %}
   },
   "dependencies": {
     "@nestjs/common": "^10.0.0",
@@ -24,6 +28,7 @@
 {%- if db_orm == "prisma" %}
     "@prisma/client": "^5.14.0",
 {%- elif db_orm == "typeorm" %}
+    "dotenv": "^16.4.5",
     "pg": "^8.11.0",
     "typeorm": "^0.3.20",
 {%- elif db_driver == "postgres-js" %}
@@ -50,6 +55,8 @@
     "prisma": "^5.14.0",
 {%- elif db_orm == "drizzle" %}
     "drizzle-kit": "^0.22.0",
+{%- elif db_orm == "typeorm" %}
+    "ts-node": "^10.9.2",
 {%- endif %}
     "typescript": "^5.4.0"
   }

@@ -103,6 +103,11 @@ const PRISMA_FILES: &[(&str, &str)] = &[(
     include_str!("../../../templates/db/schema.prisma"),
 )];
 
+const TYPEORM_FILES: &[(&str, &str)] = &[(
+    "src/database/data-source.ts",
+    include_str!("../../../templates/db/data-source.ts"),
+)];
+
 /// Returns the starter project's files with substitution placeholders
 /// (`{{project_name}}`, `{{package_version}}`, ...) filled in, plus a
 /// `DatabaseModule` wired up for `db_orm`.
@@ -124,7 +129,7 @@ pub fn starter_files(
     let orm_files: &[(&str, &str)] = match db_orm {
         DbOrm::Drizzle => DRIZZLE_FILES,
         DbOrm::Prisma => PRISMA_FILES,
-        DbOrm::Typeorm => &[],
+        DbOrm::Typeorm => TYPEORM_FILES,
     };
 
     let mut files: Vec<(PathBuf, String)> = FILES

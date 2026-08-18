@@ -1,6 +1,7 @@
 mod args;
 mod commands;
 mod context;
+mod db_orm;
 mod fs;
 mod json_payload;
 

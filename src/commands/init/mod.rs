@@ -1,5 +1,6 @@
 mod args;
 mod config;
+mod project_config;
 mod templates;
 
 use std::path::PathBuf;
@@ -20,6 +21,10 @@ pub fn run(args: &Args, ctx: &Context) -> Result<()> {
     for (path, contents) in templates::starter_files(name, args.orm, args.driver)? {
         ctx.fs.write_file(&root.join(path), &contents)?;
     }
+
+    let project_config = project_config::render(args.orm, args.driver, args.package_manager)?;
+    ctx.fs
+        .write_file(&root.join("ci/config.json"), &project_config)?;
 
     if !args.skip_git {
         ctx.commands.run("git", &["init"], &root)?;
