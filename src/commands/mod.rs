@@ -1,3 +1,4 @@
+pub mod add;
 pub mod db;
 pub mod init;
 pub mod update;
@@ -14,5 +15,6 @@ pub fn run(cli: &Cli, ctx: &Context) -> anyhow::Result<()> {
         }
         Commands::Update(args) => update::run(args, ctx),
         Commands::Db(args) => db::run(args, ctx),
+        Commands::Add(args) => add::run(args, ctx),
     }
 }

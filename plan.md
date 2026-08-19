@@ -1,433 +1,351 @@
-# Plan: event-driven command output — `Ui` + lifecycle `EventBus`, both DI'd
+# Plan: `ci add` — wire NestJS techniques into an existing project
 
-## Status: shipped
+## Status: shipped in v0.1.2
 
-Implemented as designed below. `src/shared/events.rs`
-(`Event`/`Action`/`EventBus`/`Updates`/`PrintAction`), `src/shared/ui.rs`
-trimmed to `Ui`/`ConsoleUi`/`RecordingUi`, `Context` gained `ui`, one
-`listeners.rs` per command (`init`/`update`/`db`), every `run()` reshaped
-into `listeners::bus(ctx).run("<tag>", |events| { ... })`. `db` uses the
-specific-tag form from "Open question" below (`"db init"`, `"db migrate"`,
-`"db migrate fresh"`, `"db migrate refresh"`, `"db migrate rollback"`,
-`"db seed"`), not one flat `"db"` tag. Verified: 47 tests passing (two new
-ones exercise `RecordingUi` — asserting `init` reports progress/success,
-and that `db migrate fresh` warns before its confirmation prompt), plus a
-real run against a throwaway Postgres container confirming output is
-unchanged end to end.
+Built as designed below. `src/commands/add/patch.rs` (`add_dependencies`,
+`insert_after`, `insert_into_array`, `append_line`), `validation/` and
+`caching/` each self-contained (own `mod.rs` + `tests.rs`, matching `db`'s
+per-subcommand folders), `Commands::Add` wired into `args`/`commands::mod`.
+Redis is `ci add caching`'s default store as approved — `CacheModule
+.registerAsync` reading `process.env.REDIS_URL`, `@keyv/redis` added to
+`package.json`, `REDIS_URL=redis://localhost:6379` appended to
+`.env`/`.env.example`. Verified: 60 tests passing (13 new — `patch.rs`'s
+four primitives unit-tested against small fixtures, both subcommands
+integration-tested against *real* `init` template output via
+`templates::starter_files(...)` rather than hand-typed fixtures, plus an
+idempotency test per subcommand), and a real `ci init` → `ci add
+validation` → `ci add caching` → re-run-both run confirming the generated
+`main.ts`/`app.module.ts`/`package.json`/`.env` are all correct and that
+re-running reports "already configured" instead of duplicating anything.
 
-Supersedes the previous versions of this file. Three decisions now locked
-in:
+Supersedes the previous version of this file (the event-driven `Ui`/
+`EventBus` plan — shipped, see `src/shared/events.rs`/`src/shared/ui.rs`
+and every command's `listeners.rs`; this doc's job there is done).
 
-1. Commands emit events; each command owns its own `listeners.rs`
-   deciding which actions react to them.
-2. Events are **lifecycle** events — `Started`/`Updated`/`Warned`/
-   `Finished`/`Error` — not ad-hoc print calls. `Started` and
-   `Finished`/`Error` are emitted automatically by wrapping a command's
-   execution, not typed out by hand at the top and bottom of every `run()`.
-3. Paths below live under `src/shared/`, matching the reorg already on
-   disk (`context.rs`/`db_orm.rs`/`fs.rs`/`json_payload.rs`/`ui.rs` moved
-   there from `src/` directly — `src/shared/events.rs` joins them).
+## Goal
 
-Printing is the only action wired up anywhere today, but the mechanism —
-and the fact that it's per-command, not one shared global registration —
-doesn't change when a second action shows up later.
+A new top-level command, `ci add <technique>`, for wiring a NestJS
+technique into a project `ci init` already created — starting with the
+two from the ask:
+
+```
+ci add validation   # https://docs.nestjs.com/techniques/validation
+ci add caching      # https://docs.nestjs.com/techniques/caching
+```
+
+`add` is deliberately named for growth — same role `db` plays for
+database operations, but for "wire technique X into this project."
+Future candidates (not built now): `ci add swagger`, `ci add throttling`,
+`ci add health-check`. Each becomes its own self-contained folder under
+`src/commands/add/`, the same shape `db`'s five subcommands already use.
 
 ---
 
-## Shape
+## The real problem: `ci` has never edited an existing file
 
+Every command so far only ever *writes* files — `init` renders fresh
+templates, `db`'s destructive operations shell out to other tools. Not
+one line of this codebase modifies a file that's already there.
+`ci add validation` needs to edit `src/main.ts` (insert a
+`ValidationPipe` global pipe); `ci add caching` needs to edit
+`src/app.module.ts` (insert `CacheModule` into `imports`). Both need to
+edit `package.json` (add dependencies). This is new capability, not a
+mechanical reuse of what `init`/`db` already do — worth its own section
+before the two subcommands, since both depend on it.
+
+### `package.json`: parse as JSON, merge, done
+
+Easy case — read it via `ctx.fs.try_read_to_string`, parse with
+`serde_json::Value`, insert into the `dependencies` object, write back
+with `to_string_pretty`. Loses whatever exact formatting the user's
+`package.json` had (key order, if they hand-edited it) but is otherwise
+completely robust — no risk of producing invalid JSON, no anchor-text
+fragility.
+
+```rust
+// src/commands/add/patch.rs
+pub fn add_dependencies(
+    ctx: &Context,
+    root: &Path,
+    deps: &[(&str, &str)],
+) -> Result<()> {
+    let path = root.join("package.json");
+    let raw = ctx.fs.try_read_to_string(&path)?
+        .ok_or_else(|| anyhow!("{} not found — run this inside a `ci init`-created project", path.display()))?;
+    let mut json: serde_json::Value = serde_json::from_str(&raw)?;
+    let deps_obj = json["dependencies"]
+        .as_object_mut()
+        .ok_or_else(|| anyhow!("package.json has no \"dependencies\" object"))?;
+    for (name, version) in deps {
+        deps_obj.entry(name.to_string()).or_insert_with(|| version.to_string().into());
+    }
+    ctx.fs.write_file(&path, &(serde_json::to_string_pretty(&json)? + "\n"))
+}
 ```
-src/shared/ui.rs        Ui (trait)      — *how* to render a message
-                                           (console today). DI'd on Context.
-src/shared/events.rs      Event           — Started/Updated/Warned/Finished/
-                                             Error, each tagged with which
-                                             command emitted it
-                          Action (trait)  — reacts to one Event. The seam
-                                             "actions to be executed" lives on.
-                          EventBus        — fans an emitted Event out to
-                                             whichever Actions it was built
-                                             with; `run()` wraps a command's
-                                             whole execution, auto-emitting
-                                             Started/Finished/Error around it
-                          PrintAction     — the one Action every command
-                                             registers today: forwards each
-                                             Event to `Ui`
 
-src/commands/init/listeners.rs    — init's own registration: which
-src/commands/update/listeners.rs    Actions react to *this command's*
-src/commands/db/listeners.rs        events. Today: just PrintAction, for
-                                     every command. The home for a future
-                                     command-specific action without
-                                     touching the other two commands or the
-                                     shared bus/action infrastructure.
+`.entry(...).or_insert_with(...)` (not overwrite) — idempotent by
+construction: running `ci add validation` twice doesn't stomp a version
+the user bumped by hand in between.
+
+### `main.ts`/`app.module.ts`: anchor-text insertion, not a TS parser
+
+No TS AST tooling in Rust worth pulling in for two insertion points. But
+`ci` already knows *exactly* what these files look like — it wrote them
+with `init`'s templates. Anchor on a known line from that template, not
+a general parse:
+
+```rust
+// src/commands/add/patch.rs
+/// Inserts `line` right after the first line containing `anchor`, unless
+/// `line` (or anything containing `already_present_marker`) is already in
+/// the file — idempotent, and errors clearly instead of guessing if the
+/// anchor isn't found (e.g. someone hand-edited the file away from what
+/// `init` generated).
+pub fn insert_after(
+    ctx: &Context,
+    path: &Path,
+    anchor: &str,
+    already_present_marker: &str,
+    line: &str,
+) -> Result<bool> {
+    let contents = ctx.fs.try_read_to_string(path)?
+        .ok_or_else(|| anyhow!("{} not found", path.display()))?;
+    if contents.contains(already_present_marker) {
+        return Ok(false); // already wired up — nothing to do
+    }
+    let mut out = String::new();
+    let mut inserted = false;
+    for l in contents.lines() {
+        out.push_str(l);
+        out.push('\n');
+        if !inserted && l.contains(anchor) {
+            out.push_str(line);
+            out.push('\n');
+            inserted = true;
+        }
+    }
+    if !inserted {
+        bail!("couldn't find `{anchor}` in {} — has it been hand-edited?", path.display());
+    }
+    ctx.fs.write_file(path, &out)?;
+    Ok(true)
+}
 ```
 
-Commands depend on `ctx.ui` (DI'd, swappable) and their own
-`listeners::bus(ctx)` (built from it). They never call `Ui` directly —
-that's wrapped inside whatever `Action`s their own `listeners.rs`
-registers, and they never emit `Started`/`Finished`/`Error` directly
-either — that's the job of `EventBus::run`, which wraps their body.
+Returns `Ok(false)` for "already there" rather than erroring — `ci add
+validation` run twice should say "already configured," not fail.
 
 ---
 
-## `Event` and `Action` — shared infrastructure, `src/shared/events.rs`
+## `ci add validation`
 
-```rust
-pub enum Event {
-    Started { command: &'static str },
-    Updated { command: &'static str, message: String },
-    Warned { command: &'static str, message: String },
-    Finished { command: &'static str, message: String },
-    Error { command: &'static str, message: String },
-}
+Per [the docs](https://docs.nestjs.com/techniques/validation):
 
-/// Reacts to one `Event`. What a command's `listeners.rs` registers a list
-/// of — today that's one action (print it) for every command, but nothing
-/// about this trait assumes that stays true, or stays the same across
-/// commands.
-pub trait Action {
-    fn handle(&self, event: &Event);
-}
+**Dependencies:** `class-validator`, `class-transformer` (`ValidationPipe`
+itself ships in `@nestjs/common`, already a dependency).
 
-pub struct EventBus<'a> {
-    actions: Vec<Box<dyn Action + 'a>>,
-}
+**`main.ts` patch** — insert right after
+`const app = await NestFactory.create(AppModule);`:
 
-impl<'a> EventBus<'a> {
-    pub fn new(actions: Vec<Box<dyn Action + 'a>>) -> Self {
-        Self { actions }
-    }
+```typescript
+app.useGlobalPipes(
+  new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+  }),
+);
+```
 
-    fn emit(&self, event: Event) {
-        for action in &self.actions {
-            action.handle(&event);
-        }
-    }
+Plus `import { ValidationPipe } from '@nestjs/common';` merged into the
+existing `@nestjs/common` import (or a new import line — simpler to add a
+second `import` line than to parse and merge named-import lists; a
+duplicate named import from the same module isn't valid TS, so this needs
+its own small check, not just `insert_after`'s "does this exact line
+exist" idempotency).
 
-    /// Runs a command's body as a lifecycle: emits `Started` first, hands
-    /// the body an `Updates` handle for `updated`/`warned` progress
-    /// signals, then emits `Finished` (the body's `Ok` value becomes the
-    /// finished message — every command here already only returns `()` on
-    /// success, so "the thing to say when done" is a natural stand-in for
-    /// it) or `Error` (from the body's `Err`, via `{err:#}`) — never both.
-    pub fn run(
-        &self,
-        command: &'static str,
-        body: impl FnOnce(&Updates) -> anyhow::Result<String>,
-    ) -> anyhow::Result<()> {
-        self.emit(Event::Started { command });
-        let updates = Updates { bus: self, command };
-        match body(&updates) {
-            Ok(message) => {
-                self.emit(Event::Finished { command, message });
-                Ok(())
-            }
-            Err(err) => {
-                self.emit(Event::Error { command, message: format!("{err:#}") });
-                Err(err)
-            }
-        }
-    }
-}
+**Example DTO template** — new file, not a patch (nothing existing to
+conflict with): `templates/add/validation/example.dto.ts` →
+`src/common/dto/example.dto.ts`, standalone/unwired (no route uses it —
+wiring it into a controller is a `generate` concern this tool doesn't
+have yet), just showing the pattern from the docs:
 
-/// Handed to a command's body by `EventBus::run` — the only way to emit
-/// progress from inside one, so `Started`/`Finished`/`Error` stay exactly
-/// paired with the body that ran, never hand-typed and never forgotten.
-pub struct Updates<'bus, 'a> {
-    bus: &'bus EventBus<'a>,
-    command: &'static str,
-}
+```typescript
+import { IsEmail, IsNotEmpty } from 'class-validator';
 
-impl Updates<'_, '_> {
-    pub fn updated(&self, message: impl Into<String>) {
-        self.bus.emit(Event::Updated { command: self.command, message: message.into() });
-    }
-    pub fn warned(&self, message: impl Into<String>) {
-        self.bus.emit(Event::Warned { command: self.command, message: message.into() });
-    }
-}
+export class ExampleDto {
+  @IsEmail()
+  email: string;
 
-/// Forwards every Event to a `Ui`. Borrows rather than owns — a command's
-/// `listeners.rs` builds this fresh each `run()` from `&ctx.ui`, so no
-/// cloning/sharing story is needed for a trait object that only needs to
-/// live as long as the one command invocation using it.
-pub struct PrintAction<'a> {
-    ui: &'a dyn crate::shared::ui::Ui,
-}
-
-impl<'a> PrintAction<'a> {
-    pub fn new(ui: &'a dyn crate::shared::ui::Ui) -> Self {
-        Self { ui }
-    }
-}
-
-impl Action for PrintAction<'_> {
-    fn handle(&self, event: &Event) {
-        match event {
-            // Nothing to say yet at this point — the first `Updated` a
-            // moment later already tells the user what's starting. Still
-            // fires for any *other* future Action that wants to know a
-            // command began (timing, logging, ...) even though this one
-            // ignores it.
-            Event::Started { .. } => {}
-            Event::Updated { message, .. } => self.ui.step(message),
-            Event::Warned { message, .. } => self.ui.warn(message),
-            Event::Finished { message, .. } => self.ui.success(message),
-            Event::Error { message, .. } => self.ui.error(message),
-        }
-    }
+  @IsNotEmpty()
+  password: string;
 }
 ```
 
-`EventBus` is a concrete struct, not a trait — the DI/swappability lives
-in *which `Action`s it's built with* (decided per-command, in each
-`listeners.rs`), not in swapping the dispatch loop itself. If some future
-need shows up for swapping dispatch order/filtering rather than just
-which actions run, promote it to a trait then; nothing above forecloses
-it.
+Whitelist/transform options match the docs' "common production config" —
+worth confirming as this project's default rather than the docs' bare
+`new ValidationPipe()`, since a scaffolding tool should hand over
+something production-shaped, not the minimal example.
 
 ---
 
-## `Ui` — the rendering seam, `src/shared/ui.rs`
+## `ci add caching`
 
-```rust
-pub trait Ui {
-    fn step(&self, msg: &str);
-    fn warn(&self, msg: &str);
-    fn success(&self, msg: &str);
-    fn error(&self, msg: &str);
-}
+Per [the docs](https://docs.nestjs.com/techniques/caching).
+**Redis is the default store** (approved) — not the bare in-memory
+`CacheModule.register()` the docs lead with.
 
-pub struct ConsoleUi;
+**Dependencies:** `@nestjs/cache-manager`, `cache-manager`, `@keyv/redis`.
+No `keyv`/`KeyvCacheableMemory` needed — those are for the docs' *multi*-
+store example (in-memory + Redis fallback layered together); a
+Redis-only default has exactly one entry in `stores`, `new KeyvRedis(...)`
+directly, no `Keyv` wrapper around it.
 
-impl Ui for ConsoleUi {
-    fn step(&self, msg: &str) { println!("→ {msg}"); }
-    fn warn(&self, msg: &str) { println!("⚠ {msg}"); }
-    fn success(&self, msg: &str) { println!("✓ {msg}"); }
-    fn error(&self, msg: &str) { eprintln!("✗ {msg}"); }
-}
+**`.env.example`/`.env` gets a new line**, same append-only shape as
+`ci init` already writing `DATABASE_URL`:
+
+```
+REDIS_URL=redis://localhost:6379
 ```
 
-Test double, for swapping into `Context` the same way
-`InMemoryFileSystem`/`NoopCommandRunner` already get swapped in:
+**`app.module.ts` patch** — two insertions, both idempotent-checked on
+`"CacheModule"`:
+1. `import { CacheModule } from '@nestjs/cache-manager';` and
+   `import { KeyvRedis } from '@keyv/redis';`
+2. Into the `imports: [...]` array:
+   ```typescript
+   CacheModule.registerAsync({
+     isGlobal: true,
+     useFactory: async () => ({
+       stores: [new KeyvRedis(process.env.REDIS_URL ?? 'redis://localhost:6379')],
+     }),
+   }),
+   ```
+   `registerAsync`+`useFactory`, not the synchronous `register()` the
+   docs lead with — needed either way once the store depends on an env
+   var read at startup, redis-default or not. Reads `process.env` raw
+   rather than injecting `ConfigService` (matching `data-source.ts`'s
+   existing `process.env.DATABASE_URL` precedent for TypeORM) — simpler
+   `useFactory` signature (no `inject: [ConfigService]`), and
+   `ConfigModule.forRoot()` already populated `process.env` via dotenv
+   before any other module's factory runs.
+
+   This is a different insertion shape than `main.ts`'s "after this
+   line" (needs "as the first/last element of this array"), so
+   `patch.rs` needs a second helper, not just `insert_after`:
 
 ```rust
-#[cfg_attr(not(test), allow(dead_code))]
-#[derive(Default)]
-pub struct RecordingUi {
-    pub messages: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
-}
-
-impl Ui for RecordingUi {
-    fn step(&self, msg: &str) { self.messages.borrow_mut().push(format!("step: {msg}")); }
-    fn warn(&self, msg: &str) { self.messages.borrow_mut().push(format!("warn: {msg}")); }
-    fn success(&self, msg: &str) { self.messages.borrow_mut().push(format!("success: {msg}")); }
-    fn error(&self, msg: &str) { self.messages.borrow_mut().push(format!("error: {msg}")); }
-}
+/// Inserts `item` as a new element right after the array's opening `[` on
+/// the line containing `array_anchor` (e.g. `"imports: ["`) — same
+/// idempotency-marker approach as `insert_after`.
+pub fn insert_into_array(
+    ctx: &Context,
+    path: &Path,
+    array_anchor: &str,
+    already_present_marker: &str,
+    item: &str,
+) -> Result<bool> { /* ... */ }
 ```
 
-`Ui` is where the DI/test-swap point actually lives — since every
-command's `listeners.rs` registers the same `PrintAction` wrapping
-whatever `ctx.ui` is, swapping `ctx.ui` to `RecordingUi` is enough for
-tests to assert on output without needing a separate test `Action` too.
+`isGlobal: true` (not per-module `register()` on `AppModule` alone) —
+matches how `ConfigModule` is already wired in `init`'s `app.module.ts`
+template, so caching is reachable the same way config already is,
+without every future module needing its own import.
+
+No example-usage file the way validation gets one DTO — the injection
+pattern (`@Inject(CACHE_MANAGER) private cacheManager: Cache`) only makes
+sense inside a real service, and this tool doesn't generate throwaway
+services. `README.md`/doc-comment territory, not a template file.
+
+Deliberately **not** adding `REDIS_URL` to `src/config/env.validation.ts`'s
+zod schema this pass — that needs a third patch shape (insert into a
+`z.object({...})` call), and unlike `DATABASE_URL` (which every ORM's
+provider fails hard without), a missing `REDIS_URL` just falls back to
+`redis://localhost:6379` at the `useFactory` call site above, so it's
+not load-bearing enough yet to justify the extra patch primitive.
 
 ---
 
-## `Context` changes (`src/shared/context.rs`)
+## Rust implementation shape
 
-```rust
-pub struct Context {
-    pub fs: Box<dyn FileSystem>,
-    pub commands: Box<dyn CommandRunner>,
-    pub ui: Box<dyn crate::shared::ui::Ui>,
-}
+```
+src/commands/add/
+  mod.rs             # dispatch: match Command::Validation/Caching
+  args.rs            # Args { command: Command }; Command::{Validation, Caching}
+  listeners.rs        # PrintAction wiring, identical to init/update/db's
+  patch.rs            # add_dependencies, insert_after, insert_into_array
+  patch/tests.rs
+  validation/
+    mod.rs            # run(): add_dependencies + two main.ts inserts + DTO template write
+    tests.rs
+  caching/
+    mod.rs            # run(): add_dependencies + two app.module.ts inserts
+    tests.rs
 
-impl Context {
-    pub fn real() -> Self {
-        Self {
-            fs: Box::new(RealFileSystem),
-            commands: Box::new(RealCommandRunner),
-            ui: Box::new(crate::shared::ui::ConsoleUi),
-        }
-    }
-}
+templates/add/validation/example.dto.ts   # new, static (no Tera needed — nothing project-specific)
 ```
 
-## Each command's `listeners.rs`
+Command tags for the event bus (matching `db`'s specific-tag precedent):
+`"add validation"`, `"add caching"`.
 
-```rust
-// src/commands/init/listeners.rs
-use crate::shared::context::Context;
-use crate::shared::events::{EventBus, PrintAction};
+No `detect.rs` equivalent needed — `add` doesn't branch on ORM, just
+needs `main.ts`/`app.module.ts`/`package.json` to exist (which
+`patch.rs`'s "not found" errors already cover without a separate
+detection pass).
 
-pub fn bus(ctx: &Context) -> EventBus<'_> {
-    EventBus::new(vec![Box::new(PrintAction::new(ctx.ui.as_ref()))])
-}
-```
-
-`src/commands/update/listeners.rs` and `src/commands/db/listeners.rs` are
-identical today — that repetition is deliberate, not an oversight to
-dedupe: each is the file that command's future second action gets added
-to, without the other two commands' behavior changing.
-
-## Call sites
-
-```rust
-// src/commands/init/mod.rs
-mod listeners;
-
-pub fn run(args: &Args, ctx: &Context) -> Result<()> {
-    listeners::bus(ctx).run("init", |events| {
-        let name = args.name.as_deref().context(...)?;
-        let root = PathBuf::from(name);
-
-        events.updated(&format!("Scaffolding a NestJS project in {} ...", root.display()));
-        for (path, contents) in templates::starter_files(name, args.orm, args.driver)? {
-            ctx.fs.write_file(&root.join(path), &contents)?;
-        }
-        // ... ci/config.json write ...
-
-        if !args.skip_git {
-            events.updated("Running git init");
-            ctx.commands.run("git", &["init"], &root)?;
-        }
-        if !args.skip_install {
-            events.updated(&format!("Installing dependencies with {}", args.package_manager.command()));
-            ctx.commands.run(args.package_manager.command(), &["install"], &root)?;
-        }
-
-        Ok(format!("Created NestJS project in {}", root.display()))
-    })
-}
-```
-
-No more manually paired "print success at the end / hope every early
-`return Err(...)` still gets reported right." `?` inside the closure falls
-through to `EventBus::run`'s `Err` arm automatically, which is the
-`Error` event firing — the lifecycle pairing is structural, not something
-each command has to remember to do correctly.
-
-`db::mod.rs` is the same reshape: each of `init`/`migrate`/`migrate
-fresh`/`migrate refresh`/`migrate rollback` becomes one
-`listeners::bus(ctx).run("db", |events| { ... })` call (or a per-action
-command tag — `"db migrate fresh"` etc — see "Open question" below).
-`guard_destructive`'s warning before the confirmation prompt becomes
-`events.warned(...)`, called from inside the closure before the
-destructive work.
-
-**`update::run`** currently takes only `args: &Args`, no `ctx` — it needs
-one now, plus its own `mod listeners;` and the same
-`listeners::bus(ctx).run("update", |events| { ... })` wrapping. Update
-its single call site in `commands::run`.
-
-**`main.rs`**: today it calls `ui::error(...)` directly on failure — that
-whole branch goes away. `commands::run`'s own dispatch already runs
-inside each command's `EventBus::run`, so by the time an `Err` reaches
-`main`, the `Error` event already fired and `PrintAction` already printed
-it. `main` just needs to exit nonzero, no second print:
-
-```rust
-fn main() {
-    if args::wants_help_all() { ... }
-    let cli = Cli::parse();
-    let ctx = Context::real();
-    if commands::run(&cli, &ctx).is_err() {
-        std::process::exit(1);
-    }
-}
-```
+`src/args/mod.rs` gains `Commands::Add(add::Args)`; `src/commands/mod.rs`
+gains the matching dispatch arm — same two-line addition `db` needed when
+it was wired in.
 
 ---
 
 ## Testing
 
-Tests swap `ctx.ui` for `RecordingUi`, same shape as swapping in
-`InMemoryFileSystem`/`NoopCommandRunner` today:
+Same `InMemoryFileSystem` + `NoopCommandRunner` + `RecordingUi` pattern
+every other command uses, but tests need to seed the fs with content
+matching what `init` actually generates (not empty files) — `patch.rs`
+operates on *existing* content, so a test with no `main.ts` present is
+testing the "not found" error path, not the real one. Pull the seed
+content from `templates::starter_files(...)`'s own output (call it in the
+test, matching a fixture, instead of hand-typing a copy of `main.ts` that
+can drift from the real template) rather than a hand-maintained fixture
+string that can silently stop matching what `init` really produces.
 
-```rust
-let ui = RecordingUi::default();
-let messages = ui.messages.clone();
-let ctx = Context {
-    fs: Box::new(InMemoryFileSystem::default()),
-    commands: Box::new(NoopCommandRunner::default()),
-    ui: Box::new(ui),
-};
-
-run(&args, &ctx).unwrap();
-
-assert!(messages.borrow().iter().any(|m| m.starts_with("success:")));
-```
-
-Because `Started`/`Finished`/`Error` are structural now (emitted by
-`EventBus::run`, not typed by hand), a test can assert the pairing itself
-holds — e.g. a failing case always produces an `error:` message and never
-a `success:` one — without that being something each command's author
-had to get right by hand.
+Idempotency gets its own test per patch: run `add::validation::run` twice
+against the same `Context`, assert the second run doesn't duplicate the
+`ValidationPipe` block (and reports "already configured" rather than
+erroring).
 
 ---
 
-## Migration steps
+## Suggested build order
 
-1. `src/shared/events.rs` — `Event`, `Action`, `EventBus` (with `run`),
-   `Updates`, `PrintAction`.
-2. `src/shared/ui.rs` — trim to the `Ui` trait + `ConsoleUi` + `RecordingUi`
-   (drop the four free functions; nothing outside `PrintAction` should
-   call `Ui` directly anymore).
-3. `Context` gains `ui: Box<dyn Ui>`; `Context::real()` wires `ConsoleUi`.
-4. One `listeners.rs` per command — `init`, `update`, `db` — each
-   exporting `pub fn bus(ctx: &Context) -> EventBus<'_>` registering
-   `PrintAction` (identical across all three today, on purpose).
-5. Give `update::run` a `&Context` parameter; update its call site in
-   `commands::run`.
-6. Reshape each command's `run()` body into the `listeners::bus(ctx)
-   .run("<name>", |events| { ... })` closure form, replacing every
-   `ui::step/warn/success/error(...)` call with
-   `events.updated/warned(...)` (the closure's `Ok(String)` /
-   propagated `Err` replace the old manual `success`/`error` calls
-   entirely).
-7. `main.rs`: build `Context::real()`, pass `&ctx` into `commands::run`,
-   delete the direct `ui::error(...)` call — `Error` already printed by
-   the time `main` sees the `Err`.
-8. Update every existing test's `Context { fs, commands }` literal to
-   also set `ui: Box::new(RecordingUi::default())` (or `ConsoleUi` where
-   a test doesn't care about output) — mechanical, same shape as when
-   `driver: DrizzleDriver::Pg` got added to every `init::Args` literal.
-9. Optionally, a few new tests asserting on `RecordingUi`'s captured
-   messages per command (not required for the migration to be complete,
-   but the reason this was worth doing over leaving `ui::*` as free
-   functions).
-
----
-
-## Open question worth deciding before step 6
-
-`db`'s five operations (`init`, `migrate`, `migrate fresh`, `migrate
-refresh`, `migrate rollback`) currently share one `run()` dispatching on
-`args.command`. Wrapping the *whole* `db::run` in one
-`listeners::bus(ctx).run("db", ...)` call means `Started`/`Finished` fire
-once per invocation regardless of which of the five ran — fine, since
-exactly one always runs per invocation anyway. The only decision is the
-`command` tag string: plain `"db"` for every operation, or something more
-specific per action (`"db migrate fresh"`, `"db migrate rollback"`, ...)
-so a future `Action` filtering on `event` can tell them apart without
-inspecting the message text. Leaning toward the specific-tag form — it's
-a few more `&'static str` literals in `db::mod.rs`'s match arms, costs
-nothing today, and is exactly the kind of thing that's annoying to
-retrofit once some future action depends on the coarser tag.
+1. `patch.rs` — `add_dependencies`, `insert_after`, `insert_into_array`,
+   each independently unit-testable against small hand-written fixture
+   strings (not full `main.ts`/`app.module.ts` yet).
+2. `ci add validation` — the simpler of the two patches (one array-less
+   insertion point plus one dependency-only file), proves the pattern.
+3. `ci add caching` — the array-insertion case.
+4. Wire `Commands::Add` into `args`/`commands::mod`.
+5. Integration tests seeded from real `templates::starter_files(...)`
+   output, plus the idempotency tests.
 
 ---
 
 ## Explicitly not building yet
 
-- **A second `Action` on any command.** Every `listeners.rs` registers
-  exactly `PrintAction` today. The structure (one file per command) exists
-  so adding a command-specific one later is additive — it doesn't mean
-  one is needed now.
-- **Multiple simultaneous `Ui` implementations at once** (e.g. print *and*
-  log to a file). `EventBus`/`Action` already support registering more
-  than one action; not exercised until something needs it.
-- **Nested/child lifecycles** (e.g. `db init` internally running two
-  sub-steps that each want their own Started/Finished pair, not just
-  `Updated` messages). Everything today is one flat `Started` →
-  `Updated`/`Warned`* → `Finished`/`Error` per command invocation; nesting
-  would need `EventBus::run` calls to compose, which they don't do yet.
+- **`--store <name>` to pick a non-Redis store.** Redis is the approved
+  default; an in-memory or multi-store (`Keyv` + `KeyvCacheableMemory`
+  layered with `KeyvRedis`, per the docs) option behind a flag is a
+  plausible follow-up, not built now.
+- **Wiring the example DTO into an actual route.** `ci add validation`
+  drops `example.dto.ts` unwired — actually using it needs a controller
+  method to attach it to, and this tool has no `generate controller`
+  command yet to make that not-arbitrary.
+- **A `--force` flag to re-patch even when the idempotency marker is
+  found.** Not clearly needed — "already configured, did nothing" seems
+  like the right default behavior for re-running `ci add validation` by
+  habit, not a footgun to design around yet.
+- **More `ci add` subcommands** (swagger, throttling, health checks,
+  ...). The command's *shape* supports growth (one folder per
+  subcommand, same as `db`); only building the two named in the ask.

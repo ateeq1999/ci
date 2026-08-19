@@ -2,7 +2,9 @@ mod args;
 mod config;
 mod listeners;
 mod project_config;
-mod templates;
+// `pub(crate)` (not private) so `commands::add`'s tests can seed fixtures
+// from real `init` output instead of hand-typed copies that can drift.
+pub(crate) mod templates;
 
 use std::path::PathBuf;
 

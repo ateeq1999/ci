@@ -1,6 +1,6 @@
 use clap::{ArgAction, CommandFactory, Parser, Subcommand};
 
-use crate::commands::{db, init, update};
+use crate::commands::{add, db, init, update};
 
 #[derive(Parser)]
 #[command(name = "ci", author, version, about, long_about = None, disable_version_flag = true)]
@@ -33,6 +33,8 @@ pub enum Commands {
     Update(update::Args),
     /// Run database migration commands (see db.md)
     Db(db::Args),
+    /// Wire a NestJS technique into an existing project (see plan.md)
+    Add(add::Args),
 }
 
 /// Checked directly against `std::env::args()` by `main`, before
