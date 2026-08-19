@@ -291,6 +291,7 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "atom-engine",
+ "chrono",
  "clap",
  "self_update",
  "serde",

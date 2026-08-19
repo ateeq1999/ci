@@ -132,6 +132,64 @@ pub fn insert_after_last_import(
     Ok(true)
 }
 
+/// Writes `contents` to `path` only if nothing is there yet — for `add`
+/// subcommands that create a brand-new file (e.g. `logger`'s own
+/// `logger.service.ts`/`logger.module.ts`) rather than patch an existing
+/// one. Returns `Ok(false)` without touching the file if something's
+/// already there, so re-running doesn't clobber whatever a project did
+/// with the file since it was first generated.
+pub fn write_file_if_absent(ctx: &Context, path: &Path, contents: &str) -> Result<bool> {
+    if ctx.fs.try_read_to_string(path)?.is_some() {
+        return Ok(false);
+    }
+    ctx.fs.write_file(path, contents)?;
+    Ok(true)
+}
+
+/// Inserts `line` right *before* the first line containing `anchor`.
+/// Complements `insert_after`/`insert_after_last_import` for the case
+/// where the natural, order-stable anchor is something that must stay
+/// last (e.g. `main.ts`'s `await app.listen(...)`) rather than something
+/// that must stay first — new content lands right above it, after
+/// whatever earlier `add` subcommands already inserted above that same
+/// anchor, without the anchors colliding. Same idempotency/error shape as
+/// `insert_after`.
+pub fn insert_before(
+    ctx: &Context,
+    path: &Path,
+    anchor: &str,
+    already_present_marker: &str,
+    line: &str,
+) -> Result<bool> {
+    let contents = ctx
+        .fs
+        .try_read_to_string(path)?
+        .ok_or_else(|| anyhow!("{} not found", path.display()))?;
+    if contents.contains(already_present_marker) {
+        return Ok(false);
+    }
+
+    let mut out = String::new();
+    let mut inserted = false;
+    for l in contents.lines() {
+        if !inserted && l.contains(anchor) {
+            out.push_str(line);
+            out.push('\n');
+            inserted = true;
+        }
+        out.push_str(l);
+        out.push('\n');
+    }
+    if !inserted {
+        bail!(
+            "couldn't find `{anchor}` in {} — has it been hand-edited?",
+            path.display()
+        );
+    }
+    ctx.fs.write_file(path, &out)?;
+    Ok(true)
+}
+
 /// Inserts `item` as a new element right after the array's opening `[` on
 /// the line containing `array_anchor` (e.g. `"imports: ["`), matching
 /// that line's indentation plus one level. Same idempotency/error shape

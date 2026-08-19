@@ -37,7 +37,7 @@ fn prisma_is_identical_to_fresh() {
     run(
         &ctx,
         root(),
-        &listeners::bus(&ctx),
+        &listeners::bus(&ctx, root()),
         Some(DbOrm::Prisma),
         &destructive(),
     )
@@ -55,7 +55,7 @@ fn typeorm_is_not_implemented() {
     let err = run(
         &ctx,
         root(),
-        &listeners::bus(&ctx),
+        &listeners::bus(&ctx, root()),
         Some(DbOrm::Typeorm),
         &destructive(),
     )
@@ -81,7 +81,7 @@ fn drizzle_reuses_the_fresh_drop_and_rebuild() {
     run(
         &ctx,
         root(),
-        &listeners::bus(&ctx),
+        &listeners::bus(&ctx, root()),
         Some(DbOrm::Drizzle),
         &destructive(),
     )

@@ -27,7 +27,7 @@ fn run_args(orm: DbOrm) -> RunArgs {
 #[test]
 fn drizzle_generates_then_migrates() {
     let (ctx, calls) = ctx();
-    run(&ctx, Path::new("proj"), &listeners::bus(&ctx), &run_args(DbOrm::Drizzle)).unwrap();
+    run(&ctx, Path::new("proj"), &listeners::bus(&ctx, Path::new("proj")), &run_args(DbOrm::Drizzle)).unwrap();
 
     assert_eq!(
         calls.borrow().as_slice(),
@@ -38,7 +38,7 @@ fn drizzle_generates_then_migrates() {
 #[test]
 fn prisma_runs_migrate_dev() {
     let (ctx, calls) = ctx();
-    run(&ctx, Path::new("proj"), &listeners::bus(&ctx), &run_args(DbOrm::Prisma)).unwrap();
+    run(&ctx, Path::new("proj"), &listeners::bus(&ctx, Path::new("proj")), &run_args(DbOrm::Prisma)).unwrap();
 
     assert_eq!(
         calls.borrow().as_slice(),
@@ -49,7 +49,7 @@ fn prisma_runs_migrate_dev() {
 #[test]
 fn typeorm_generates_then_runs() {
     let (ctx, calls) = ctx();
-    run(&ctx, Path::new("proj"), &listeners::bus(&ctx), &run_args(DbOrm::Typeorm)).unwrap();
+    run(&ctx, Path::new("proj"), &listeners::bus(&ctx, Path::new("proj")), &run_args(DbOrm::Typeorm)).unwrap();
 
     assert_eq!(
         calls.borrow().as_slice(),

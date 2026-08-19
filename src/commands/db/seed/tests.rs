@@ -22,7 +22,7 @@ fn not_implemented_for_any_orm() {
         let err = run(
             &ctx,
             Path::new("proj"),
-            &listeners::bus(&ctx),
+            &listeners::bus(&ctx, Path::new("proj")),
             &RunArgs { orm: Some(orm) },
         )
         .unwrap_err();

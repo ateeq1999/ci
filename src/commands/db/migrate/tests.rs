@@ -34,7 +34,7 @@ fn bare_migrate_maps_to_the_right_command_per_orm() {
         run(
             &ctx,
             Path::new("proj"),
-            &listeners::bus(&ctx),
+            &listeners::bus(&ctx, Path::new("proj")),
             &MigrateArgs {
                 action: None,
                 orm: Some(orm),

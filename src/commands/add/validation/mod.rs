@@ -31,10 +31,9 @@ pub fn run(ctx: &Context, root: &Path, bus: &EventBus) -> Result<()> {
         let main_ts = root.join("src/main.ts");
 
         events.updated("Registering the global ValidationPipe in main.ts");
-        let import_added = patch::insert_after(
+        let import_added = patch::insert_after_last_import(
             ctx,
             &main_ts,
-            "import { NestFactory } from '@nestjs/core';",
             "import { ValidationPipe }",
             IMPORT_LINE,
         )?;

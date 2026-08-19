@@ -19,7 +19,7 @@ use crate::shared::context::Context;
 
 pub fn run(args: &Args, ctx: &Context) -> anyhow::Result<()> {
     let root = std::env::current_dir()?;
-    let bus = listeners::bus(ctx);
+    let bus = listeners::bus(ctx, &root);
 
     match &args.command {
         Command::Init(run_args) => init::run(ctx, &root, &bus, run_args),

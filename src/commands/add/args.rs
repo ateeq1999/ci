@@ -16,4 +16,6 @@ pub enum Command {
     Schedule,
     /// Wire up Redis-backed queues (@nestjs/bullmq)
     Queue,
+    /// Wire up a standalone LoggerModule (console logger by default)
+    Logger,
 }

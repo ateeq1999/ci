@@ -51,7 +51,7 @@ fn ctx_with_database_url(url: &str) -> (Context, std::rc::Rc<std::cell::RefCell<
 #[test]
 fn prisma_resets_with_force() {
     let (ctx, calls) = ctx();
-    run(&ctx, root(), &listeners::bus(&ctx), Some(DbOrm::Prisma), &destructive()).unwrap();
+    run(&ctx, root(), &listeners::bus(&ctx, root()), Some(DbOrm::Prisma), &destructive()).unwrap();
 
     assert_eq!(
         calls.borrow().as_slice(),
@@ -62,7 +62,7 @@ fn prisma_resets_with_force() {
 #[test]
 fn typeorm_drops_schema_then_runs() {
     let (ctx, calls) = ctx();
-    run(&ctx, root(), &listeners::bus(&ctx), Some(DbOrm::Typeorm), &destructive()).unwrap();
+    run(&ctx, root(), &listeners::bus(&ctx, root()), Some(DbOrm::Typeorm), &destructive()).unwrap();
 
     assert_eq!(
         calls.borrow().as_slice(),
@@ -76,7 +76,7 @@ fn typeorm_drops_schema_then_runs() {
 #[test]
 fn drizzle_drops_schema_then_regenerates() {
     let (ctx, calls) = ctx_with_database_url("postgres://user:pass@localhost:5432/my_api");
-    run(&ctx, root(), &listeners::bus(&ctx), Some(DbOrm::Drizzle), &destructive()).unwrap();
+    run(&ctx, root(), &listeners::bus(&ctx, root()), Some(DbOrm::Drizzle), &destructive()).unwrap();
 
     let calls = calls.borrow();
     assert_eq!(calls.len(), 3);
@@ -112,7 +112,7 @@ fn drizzle_postgres_js_driver_uses_the_postgres_js_script() {
         ui: Box::new(ConsoleUi),
     };
 
-    run(&ctx, root(), &listeners::bus(&ctx), None, &destructive()).unwrap();
+    run(&ctx, root(), &listeners::bus(&ctx, root()), None, &destructive()).unwrap();
 
     assert!(calls.borrow()[0].contains("require(\"postgres\")"));
 }
@@ -120,7 +120,7 @@ fn drizzle_postgres_js_driver_uses_the_postgres_js_script() {
 #[test]
 fn drizzle_errors_clearly_without_a_env_file() {
     let (ctx, calls) = ctx();
-    let err = run(&ctx, root(), &listeners::bus(&ctx), Some(DbOrm::Drizzle), &destructive())
+    let err = run(&ctx, root(), &listeners::bus(&ctx, root()), Some(DbOrm::Drizzle), &destructive())
         .unwrap_err();
 
     assert!(err.to_string().contains(".env"));

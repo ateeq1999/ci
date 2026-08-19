@@ -232,6 +232,100 @@ fn insert_after_last_import_errors_when_no_import_found() {
 }
 
 #[test]
+fn insert_before_lands_right_above_the_anchor_and_is_idempotent() {
+    let ctx = ctx_with_file(
+        "proj/main.ts",
+        "const app = await NestFactory.create(AppModule);\nawait app.listen(3000);\n",
+    );
+
+    let first = insert_before(
+        &ctx,
+        Path::new("proj/main.ts"),
+        "await app.listen(",
+        "app.useLogger",
+        "app.useLogger(app.get(AppLogger));",
+    )
+    .unwrap();
+    assert!(first);
+    assert_eq!(
+        written(&ctx, "proj/main.ts"),
+        "const app = await NestFactory.create(AppModule);\napp.useLogger(app.get(AppLogger));\nawait app.listen(3000);\n"
+    );
+
+    let second = insert_before(
+        &ctx,
+        Path::new("proj/main.ts"),
+        "await app.listen(",
+        "app.useLogger",
+        "app.useLogger(app.get(AppLogger));",
+    )
+    .unwrap();
+    assert!(!second, "second call should be a no-op");
+}
+
+#[test]
+fn insert_before_stacks_after_content_inserted_by_an_earlier_insert_after_call() {
+    // Simulates `ci add validation` (inserts right after NestFactory.create
+    // via insert_after) followed by `ci add logger` (inserts right before
+    // app.listen via insert_before) — the two anchors are structurally
+    // distinct, so there's no collision regardless of run order.
+    let ctx = ctx_with_file(
+        "proj/main.ts",
+        "const app = await NestFactory.create(AppModule);\nawait app.listen(3000);\n",
+    );
+
+    insert_after(
+        &ctx,
+        Path::new("proj/main.ts"),
+        "const app = await NestFactory.create(AppModule);",
+        "app.useGlobalPipes",
+        "app.useGlobalPipes(new ValidationPipe());",
+    )
+    .unwrap();
+    insert_before(
+        &ctx,
+        Path::new("proj/main.ts"),
+        "await app.listen(",
+        "app.useLogger",
+        "app.useLogger(app.get(AppLogger));",
+    )
+    .unwrap();
+
+    assert_eq!(
+        written(&ctx, "proj/main.ts"),
+        "const app = await NestFactory.create(AppModule);\napp.useGlobalPipes(new ValidationPipe());\napp.useLogger(app.get(AppLogger));\nawait app.listen(3000);\n"
+    );
+}
+
+#[test]
+fn insert_before_errors_when_anchor_missing() {
+    let ctx = ctx_with_file("proj/main.ts", "console.log('hi');\n");
+    let err = insert_before(
+        &ctx,
+        Path::new("proj/main.ts"),
+        "not there",
+        "marker",
+        "line",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("hand-edited"));
+}
+
+#[test]
+fn write_file_if_absent_writes_once_and_never_overwrites() {
+    let ctx = ctx_with_file("proj/.gitignore", "node_modules\n");
+
+    let first = write_file_if_absent(&ctx, Path::new("proj/logger.service.ts"), "// v1\n").unwrap();
+    assert!(first);
+    assert_eq!(written(&ctx, "proj/logger.service.ts"), "// v1\n");
+
+    let second =
+        write_file_if_absent(&ctx, Path::new("proj/logger.service.ts"), "// v2\n").unwrap();
+    assert!(!second, "should not overwrite an already-present file");
+    assert_eq!(written(&ctx, "proj/logger.service.ts"), "// v1\n");
+}
+
+#[test]
 fn insert_into_array_adds_indented_item_once() {
     let ctx = ctx_with_file(
         "proj/app.module.ts",

@@ -38,7 +38,7 @@ fn typeorm_reverts_step_times() {
     run(
         &ctx,
         root(),
-        &listeners::bus(&ctx),
+        &listeners::bus(&ctx, root()),
         Some(DbOrm::Typeorm),
         &rollback_args(3),
     )
@@ -57,7 +57,7 @@ fn drizzle_and_prisma_are_not_supported() {
         let err = run(
             &ctx,
             root(),
-            &listeners::bus(&ctx),
+            &listeners::bus(&ctx, root()),
             Some(orm),
             &rollback_args(1),
         )

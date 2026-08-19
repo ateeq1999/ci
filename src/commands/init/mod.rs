@@ -15,13 +15,20 @@ pub use args::Args;
 use crate::shared::context::Context;
 
 pub fn run(args: &Args, ctx: &Context) -> Result<()> {
-    listeners::bus(ctx).run("init", |events| {
-        let name = args
-            .name
-            .as_deref()
-            .context("`name` is required (pass it as an argument, or include it in --json)")?;
-        let root = PathBuf::from(name);
+    // Validated and computed *before* the event lifecycle starts (unlike
+    // every other step below, which runs inside `bus.run`'s closure) so
+    // `listeners::bus` has a project root to attach history to even when
+    // nothing else about this run succeeds. If `name` itself is missing,
+    // there's no project to record history against at all — that failure
+    // is reported the same way it always was, just without ever
+    // constructing a bus for it.
+    let name = args
+        .name
+        .as_deref()
+        .context("`name` is required (pass it as an argument, or include it in --json)")?;
+    let root = PathBuf::from(name);
 
+    listeners::bus(ctx, &root).run("init", |events| {
         events.updated(format!(
             "Scaffolding a NestJS project in {} ({}, {})",
             root.display(),

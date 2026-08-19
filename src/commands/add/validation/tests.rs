@@ -45,7 +45,7 @@ fn read(ctx: &Context, path: &str) -> String {
 #[test]
 fn configures_main_ts_and_installs_with_npm_by_default() {
     let (ctx, calls) = ctx_from_real_init_output();
-    let bus = crate::commands::add::listeners::bus(&ctx);
+    let bus = crate::commands::add::listeners::bus(&ctx, root());
 
     run(&ctx, root(), &bus).unwrap();
 
@@ -89,7 +89,7 @@ fn installs_with_the_project_configured_package_manager() {
         commands: Box::new(commands),
         ui: Box::new(ConsoleUi),
     };
-    let bus = crate::commands::add::listeners::bus(&ctx);
+    let bus = crate::commands::add::listeners::bus(&ctx, root());
 
     run(&ctx, root(), &bus).unwrap();
 
@@ -102,7 +102,7 @@ fn installs_with_the_project_configured_package_manager() {
 #[test]
 fn running_twice_does_not_duplicate_the_pipe() {
     let (ctx, _calls) = ctx_from_real_init_output();
-    let bus = crate::commands::add::listeners::bus(&ctx);
+    let bus = crate::commands::add::listeners::bus(&ctx, root());
 
     run(&ctx, root(), &bus).unwrap();
     run(&ctx, root(), &bus).unwrap();
@@ -129,7 +129,7 @@ fn reports_already_configured_on_second_run() {
         commands: Box::new(NoopCommandRunner::default()),
         ui: Box::new(ui),
     };
-    let bus = crate::commands::add::listeners::bus(&ctx);
+    let bus = crate::commands::add::listeners::bus(&ctx, root());
 
     run(&ctx, root(), &bus).unwrap();
     run(&ctx, root(), &bus).unwrap();
