@@ -1,10 +1,13 @@
 //! `ci add` — thin dispatch only, same shape as `db`. Every subcommand
-//! (`validation`/`cache`) is its own self-contained module.
+//! (`validation`/`cache`/`schedule`/`queue`) is its own self-contained
+//! module.
 
 mod args;
 mod cache;
 mod listeners;
 mod patch;
+mod queue;
+mod schedule;
 mod validation;
 
 pub use args::Args;
@@ -19,5 +22,7 @@ pub fn run(args: &Args, ctx: &Context) -> anyhow::Result<()> {
     match &args.command {
         Command::Validation => validation::run(ctx, &root, &bus),
         Command::Cache => cache::run(ctx, &root, &bus),
+        Command::Schedule => schedule::run(ctx, &root, &bus),
+        Command::Queue => queue::run(ctx, &root, &bus),
     }
 }

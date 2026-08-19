@@ -12,4 +12,8 @@ pub enum Command {
     Validation,
     /// Wire up Redis-backed caching (@nestjs/cache-manager)
     Cache,
+    /// Wire up task scheduling (@nestjs/schedule)
+    Schedule,
+    /// Wire up Redis-backed queues (@nestjs/bullmq)
+    Queue,
 }

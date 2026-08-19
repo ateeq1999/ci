@@ -141,6 +141,97 @@ fn insert_after_errors_when_anchor_missing() {
 }
 
 #[test]
+fn insert_after_last_import_lands_after_the_last_import_line() {
+    let ctx = ctx_with_file(
+        "proj/app.module.ts",
+        "import { Module } from '@nestjs/common';\nimport { DatabaseModule } from './database/database.module';\n\n@Module({})\n",
+    );
+
+    let inserted = insert_after_last_import(
+        &ctx,
+        Path::new("proj/app.module.ts"),
+        "import { CacheModule }",
+        "import { CacheModule } from '@nestjs/cache-manager';",
+    )
+    .unwrap();
+    assert!(inserted);
+    assert_eq!(
+        written(&ctx, "proj/app.module.ts"),
+        "import { Module } from '@nestjs/common';\nimport { DatabaseModule } from './database/database.module';\nimport { CacheModule } from '@nestjs/cache-manager';\n\n@Module({})\n"
+    );
+}
+
+#[test]
+fn insert_after_last_import_stacks_after_a_previously_inserted_import() {
+    // Simulates `ci add cache` followed by `ci add schedule`: the second
+    // subcommand's import must land after the first's, not both landing
+    // in the same fixed spot.
+    let ctx = ctx_with_file(
+        "proj/app.module.ts",
+        "import { Module } from '@nestjs/common';\nimport { DatabaseModule } from './database/database.module';\n\n@Module({})\n",
+    );
+
+    insert_after_last_import(
+        &ctx,
+        Path::new("proj/app.module.ts"),
+        "import { CacheModule }",
+        "import { CacheModule } from '@nestjs/cache-manager';",
+    )
+    .unwrap();
+    insert_after_last_import(
+        &ctx,
+        Path::new("proj/app.module.ts"),
+        "import { ScheduleModule }",
+        "import { ScheduleModule } from '@nestjs/schedule';",
+    )
+    .unwrap();
+
+    assert_eq!(
+        written(&ctx, "proj/app.module.ts"),
+        "import { Module } from '@nestjs/common';\nimport { DatabaseModule } from './database/database.module';\nimport { CacheModule } from '@nestjs/cache-manager';\nimport { ScheduleModule } from '@nestjs/schedule';\n\n@Module({})\n"
+    );
+}
+
+#[test]
+fn insert_after_last_import_is_idempotent() {
+    let ctx = ctx_with_file(
+        "proj/app.module.ts",
+        "import { Module } from '@nestjs/common';\n\n@Module({})\n",
+    );
+
+    let first = insert_after_last_import(
+        &ctx,
+        Path::new("proj/app.module.ts"),
+        "import { CacheModule }",
+        "import { CacheModule } from '@nestjs/cache-manager';",
+    )
+    .unwrap();
+    assert!(first);
+
+    let second = insert_after_last_import(
+        &ctx,
+        Path::new("proj/app.module.ts"),
+        "import { CacheModule }",
+        "import { CacheModule } from '@nestjs/cache-manager';",
+    )
+    .unwrap();
+    assert!(!second, "second call should be a no-op");
+}
+
+#[test]
+fn insert_after_last_import_errors_when_no_import_found() {
+    let ctx = ctx_with_file("proj/app.module.ts", "@Module({})\n");
+    let err = insert_after_last_import(
+        &ctx,
+        Path::new("proj/app.module.ts"),
+        "marker",
+        "import { X } from 'y';",
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("no `import` line found"));
+}
+
+#[test]
 fn insert_into_array_adds_indented_item_once() {
     let ctx = ctx_with_file(
         "proj/app.module.ts",

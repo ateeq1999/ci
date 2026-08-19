@@ -92,6 +92,46 @@ pub fn insert_after(
     Ok(true)
 }
 
+/// Inserts `lines` right after the *last* line starting with `import `,
+/// rather than a fixed anchor — so when more than one `ci add` subcommand
+/// patches the same file (e.g. `cache`/`schedule`/`queue` all touching
+/// `app.module.ts`), each new import lands after whatever the previous
+/// subcommand already inserted, instead of every subcommand colliding on
+/// the same fixed anchor line. Same idempotency/error shape as
+/// `insert_after`.
+pub fn insert_after_last_import(
+    ctx: &Context,
+    path: &Path,
+    already_present_marker: &str,
+    lines: &str,
+) -> Result<bool> {
+    let contents = ctx
+        .fs
+        .try_read_to_string(path)?
+        .ok_or_else(|| anyhow!("{} not found", path.display()))?;
+    if contents.contains(already_present_marker) {
+        return Ok(false);
+    }
+
+    let all_lines: Vec<&str> = contents.lines().collect();
+    let last_import = all_lines
+        .iter()
+        .rposition(|l| l.trim_start().starts_with("import "))
+        .ok_or_else(|| anyhow!("no `import` line found in {}", path.display()))?;
+
+    let mut out = String::new();
+    for (i, l) in all_lines.iter().enumerate() {
+        out.push_str(l);
+        out.push('\n');
+        if i == last_import {
+            out.push_str(lines);
+            out.push('\n');
+        }
+    }
+    ctx.fs.write_file(path, &out)?;
+    Ok(true)
+}
+
 /// Inserts `item` as a new element right after the array's opening `[` on
 /// the line containing `array_anchor` (e.g. `"imports: ["`), matching
 /// that line's indentation plus one level. Same idempotency/error shape
