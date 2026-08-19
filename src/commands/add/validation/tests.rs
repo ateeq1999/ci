@@ -14,7 +14,7 @@ fn root() -> &'static Path {
 /// Seeds an `InMemoryFileSystem` with `ci init`'s *real* rendered output
 /// (not a hand-typed copy of `main.ts`/`package.json` that can silently
 /// drift from what `init` actually produces).
-fn ctx_from_real_init_output() -> Context {
+fn ctx_from_real_init_output() -> (Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
     let fs = InMemoryFileSystem::default();
     for (path, contents) in
         templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap()
@@ -23,11 +23,16 @@ fn ctx_from_real_init_output() -> Context {
             .borrow_mut()
             .insert(root().join(path), contents);
     }
-    Context {
-        fs: Box::new(fs),
-        commands: Box::new(NoopCommandRunner::default()),
-        ui: Box::new(ConsoleUi),
-    }
+    let commands = NoopCommandRunner::default();
+    let calls = commands.calls.clone();
+    (
+        Context {
+            fs: Box::new(fs),
+            commands: Box::new(commands),
+            ui: Box::new(ConsoleUi),
+        },
+        calls,
+    )
 }
 
 fn read(ctx: &Context, path: &str) -> String {
@@ -38,8 +43,8 @@ fn read(ctx: &Context, path: &str) -> String {
 }
 
 #[test]
-fn configures_main_ts_adds_deps_and_example_dto() {
-    let ctx = ctx_from_real_init_output();
+fn configures_main_ts_and_installs_with_npm_by_default() {
+    let (ctx, calls) = ctx_from_real_init_output();
     let bus = crate::commands::add::listeners::bus(&ctx);
 
     run(&ctx, root(), &bus).unwrap();
@@ -49,18 +54,54 @@ fn configures_main_ts_adds_deps_and_example_dto() {
     assert!(main_ts.contains("app.useGlobalPipes("));
     assert!(main_ts.contains("whitelist: true"));
 
-    let package_json = read(&ctx, "package.json");
-    let parsed: serde_json::Value = serde_json::from_str(&package_json).unwrap();
-    assert!(parsed["dependencies"]["class-validator"].is_string());
-    assert!(parsed["dependencies"]["class-transformer"].is_string());
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["npm install class-validator class-transformer"]
+    );
 
-    let dto = read(&ctx, "src/common/dto/example.dto.ts");
-    assert!(dto.contains("export class ExampleDto"));
+    // No example DTO — `ci add validation` only wires the pipe + installs.
+    assert!(
+        ctx.fs
+            .try_read_to_string(&root().join("src/common/dto/example.dto.ts"))
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn installs_with_the_project_configured_package_manager() {
+    let fs = InMemoryFileSystem::default();
+    for (path, contents) in
+        templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap()
+    {
+        fs.written
+            .borrow_mut()
+            .insert(root().join(path), contents);
+    }
+    fs.written.borrow_mut().insert(
+        root().join("ci/config.json"),
+        r#"{"ciVersion":"0.1.2","orm":"drizzle","packageManager":"pnpm"}"#.to_string(),
+    );
+    let commands = NoopCommandRunner::default();
+    let calls = commands.calls.clone();
+    let ctx = Context {
+        fs: Box::new(fs),
+        commands: Box::new(commands),
+        ui: Box::new(ConsoleUi),
+    };
+    let bus = crate::commands::add::listeners::bus(&ctx);
+
+    run(&ctx, root(), &bus).unwrap();
+
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["pnpm add class-validator class-transformer"]
+    );
 }
 
 #[test]
 fn running_twice_does_not_duplicate_the_pipe() {
-    let ctx = ctx_from_real_init_output();
+    let (ctx, _calls) = ctx_from_real_init_output();
     let bus = crate::commands::add::listeners::bus(&ctx);
 
     run(&ctx, root(), &bus).unwrap();

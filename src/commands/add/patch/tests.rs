@@ -17,6 +17,25 @@ fn ctx_with_file(path: &str, contents: &str) -> Context {
     }
 }
 
+fn ctx_with_files(files: &[(&str, &str)]) -> (Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
+    let fs = InMemoryFileSystem::default();
+    for (path, contents) in files {
+        fs.written
+            .borrow_mut()
+            .insert(PathBuf::from(*path), contents.to_string());
+    }
+    let commands = NoopCommandRunner::default();
+    let calls = commands.calls.clone();
+    (
+        Context {
+            fs: Box::new(fs),
+            commands: Box::new(commands),
+            ui: Box::new(ConsoleUi),
+        },
+        calls,
+    )
+}
+
 fn written(ctx: &Context, path: &str) -> String {
     ctx.fs
         .try_read_to_string(Path::new(path))
@@ -25,44 +44,52 @@ fn written(ctx: &Context, path: &str) -> String {
 }
 
 #[test]
-fn add_dependencies_inserts_new_entries() {
+fn detect_package_manager_reads_ci_config_json() {
     let ctx = ctx_with_file(
-        "proj/package.json",
-        r#"{"dependencies":{"@nestjs/common":"^10.0.0"}}"#,
+        "proj/ci/config.json",
+        r#"{"ciVersion":"0.1.2","orm":"drizzle","packageManager":"pnpm"}"#,
     );
-
-    add_dependencies(
-        &ctx,
-        Path::new("proj"),
-        &[("class-validator", "^0.14.1")],
-    )
-    .unwrap();
-
-    let out = written(&ctx, "proj/package.json");
-    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(parsed["dependencies"]["@nestjs/common"], "^10.0.0");
-    assert_eq!(parsed["dependencies"]["class-validator"], "^0.14.1");
+    assert_eq!(
+        detect_package_manager(&ctx, Path::new("proj")),
+        PackageManager::Pnpm
+    );
 }
 
 #[test]
-fn add_dependencies_does_not_overwrite_an_existing_version() {
-    let ctx = ctx_with_file(
-        "proj/package.json",
-        r#"{"dependencies":{"class-validator":"^0.13.0"}}"#,
-    );
-
-    add_dependencies(&ctx, Path::new("proj"), &[("class-validator", "^0.14.1")]).unwrap();
-
-    let out = written(&ctx, "proj/package.json");
-    let parsed: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(parsed["dependencies"]["class-validator"], "^0.13.0");
-}
-
-#[test]
-fn add_dependencies_errors_clearly_when_package_json_missing() {
+fn detect_package_manager_falls_back_to_npm_when_config_missing() {
     let ctx = ctx_with_file("proj/.gitignore", "node_modules\n");
-    let err = add_dependencies(&ctx, Path::new("proj"), &[("x", "^1.0.0")]).unwrap_err();
-    assert!(err.to_string().contains("not found"));
+    assert_eq!(
+        detect_package_manager(&ctx, Path::new("proj")),
+        PackageManager::Npm
+    );
+}
+
+#[test]
+fn detect_package_manager_falls_back_to_npm_when_config_unparseable() {
+    let ctx = ctx_with_file("proj/ci/config.json", "not json");
+    assert_eq!(
+        detect_package_manager(&ctx, Path::new("proj")),
+        PackageManager::Npm
+    );
+}
+
+#[test]
+fn install_dependencies_uses_install_verb_for_npm() {
+    let (ctx, calls) = ctx_with_files(&[]);
+    install_dependencies(&ctx, Path::new("proj"), PackageManager::Npm, &["foo", "bar"]).unwrap();
+    assert_eq!(calls.borrow().as_slice(), ["npm install foo bar"]);
+}
+
+#[test]
+fn install_dependencies_uses_add_verb_for_pnpm_and_yarn() {
+    for pm in [PackageManager::Pnpm, PackageManager::Yarn] {
+        let (ctx, calls) = ctx_with_files(&[]);
+        install_dependencies(&ctx, Path::new("proj"), pm, &["foo"]).unwrap();
+        assert_eq!(
+            calls.borrow().as_slice(),
+            [format!("{} add foo", pm.command())]
+        );
+    }
 }
 
 #[test]

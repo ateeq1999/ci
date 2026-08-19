@@ -1,7 +1,8 @@
-//! `ci add caching` — self-contained: patches `app.module.ts` to register
+//! `ci add cache` — self-contained: patches `app.module.ts` to register
 //! `CacheModule` backed by Redis (the approved default — not the docs'
-//! bare in-memory `register()`), adds the required dependencies, and adds
-//! `REDIS_URL` to `.env`/`.env.example`.
+//! bare in-memory `register()`), installs the required dependencies with
+//! the project's configured package manager, and adds `REDIS_URL` to
+//! `.env`/`.env.example`.
 
 use std::path::Path;
 
@@ -20,16 +21,17 @@ const IMPORTS_ARRAY_ITEM: &str = "CacheModule.registerAsync({\n      isGlobal: t
 const REDIS_URL_LINE: &str = "REDIS_URL=redis://localhost:6379";
 
 pub fn run(ctx: &Context, root: &Path, bus: &EventBus) -> Result<()> {
-    bus.run("add caching", |events| {
-        events.updated("Adding @nestjs/cache-manager, cache-manager, @keyv/redis");
-        patch::add_dependencies(
+    bus.run("add cache", |events| {
+        let package_manager = patch::detect_package_manager(ctx, root);
+        events.updated(format!(
+            "Installing @nestjs/cache-manager, cache-manager, @keyv/redis with {}",
+            package_manager.command()
+        ));
+        patch::install_dependencies(
             ctx,
             root,
-            &[
-                ("@nestjs/cache-manager", "^2.2.2"),
-                ("cache-manager", "^5.7.6"),
-                ("@keyv/redis", "^2.8.4"),
-            ],
+            package_manager,
+            &["@nestjs/cache-manager", "cache-manager", "@keyv/redis"],
         )?;
 
         events.updated("Adding REDIS_URL to .env and .env.example");

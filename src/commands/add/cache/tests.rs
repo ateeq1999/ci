@@ -14,7 +14,7 @@ fn root() -> &'static Path {
 /// Seeds an `InMemoryFileSystem` with `ci init`'s *real* rendered output
 /// (not a hand-typed copy of `app.module.ts`/`package.json` that can
 /// silently drift from what `init` actually produces).
-fn ctx_from_real_init_output() -> Context {
+fn ctx_from_real_init_output() -> (Context, std::rc::Rc<std::cell::RefCell<Vec<String>>>) {
     let fs = InMemoryFileSystem::default();
     for (path, contents) in
         templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap()
@@ -23,11 +23,16 @@ fn ctx_from_real_init_output() -> Context {
             .borrow_mut()
             .insert(root().join(path), contents);
     }
-    Context {
-        fs: Box::new(fs),
-        commands: Box::new(NoopCommandRunner::default()),
-        ui: Box::new(ConsoleUi),
-    }
+    let commands = NoopCommandRunner::default();
+    let calls = commands.calls.clone();
+    (
+        Context {
+            fs: Box::new(fs),
+            commands: Box::new(commands),
+            ui: Box::new(ConsoleUi),
+        },
+        calls,
+    )
 }
 
 fn read(ctx: &Context, path: &str) -> String {
@@ -38,8 +43,8 @@ fn read(ctx: &Context, path: &str) -> String {
 }
 
 #[test]
-fn configures_app_module_adds_deps_and_redis_url() {
-    let ctx = ctx_from_real_init_output();
+fn configures_app_module_installs_with_npm_and_adds_redis_url() {
+    let (ctx, calls) = ctx_from_real_init_output();
     let bus = crate::commands::add::listeners::bus(&ctx);
 
     run(&ctx, root(), &bus).unwrap();
@@ -52,11 +57,10 @@ fn configures_app_module_adds_deps_and_redis_url() {
     // Already-present DatabaseModule wiring must survive the patch untouched.
     assert!(app_module.contains("DatabaseModule,"));
 
-    let package_json = read(&ctx, "package.json");
-    let parsed: serde_json::Value = serde_json::from_str(&package_json).unwrap();
-    assert!(parsed["dependencies"]["@nestjs/cache-manager"].is_string());
-    assert!(parsed["dependencies"]["cache-manager"].is_string());
-    assert!(parsed["dependencies"]["@keyv/redis"].is_string());
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["npm install @nestjs/cache-manager cache-manager @keyv/redis"]
+    );
 
     let env = read(&ctx, ".env");
     let env_example = read(&ctx, ".env.example");
@@ -65,8 +69,39 @@ fn configures_app_module_adds_deps_and_redis_url() {
 }
 
 #[test]
+fn installs_with_the_project_configured_package_manager() {
+    let fs = InMemoryFileSystem::default();
+    for (path, contents) in
+        templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap()
+    {
+        fs.written
+            .borrow_mut()
+            .insert(root().join(path), contents);
+    }
+    fs.written.borrow_mut().insert(
+        root().join("ci/config.json"),
+        r#"{"ciVersion":"0.1.2","orm":"drizzle","packageManager":"yarn"}"#.to_string(),
+    );
+    let commands = NoopCommandRunner::default();
+    let calls = commands.calls.clone();
+    let ctx = Context {
+        fs: Box::new(fs),
+        commands: Box::new(commands),
+        ui: Box::new(ConsoleUi),
+    };
+    let bus = crate::commands::add::listeners::bus(&ctx);
+
+    run(&ctx, root(), &bus).unwrap();
+
+    assert_eq!(
+        calls.borrow().as_slice(),
+        ["yarn add @nestjs/cache-manager cache-manager @keyv/redis"]
+    );
+}
+
+#[test]
 fn running_twice_does_not_duplicate_the_module() {
-    let ctx = ctx_from_real_init_output();
+    let (ctx, _calls) = ctx_from_real_init_output();
     let bus = crate::commands::add::listeners::bus(&ctx);
 
     run(&ctx, root(), &bus).unwrap();

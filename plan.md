@@ -2,21 +2,42 @@
 
 ## Status: shipped in v0.1.2
 
-Built as designed below. `src/commands/add/patch.rs` (`add_dependencies`,
-`insert_after`, `insert_into_array`, `append_line`), `validation/` and
-`caching/` each self-contained (own `mod.rs` + `tests.rs`, matching `db`'s
-per-subcommand folders), `Commands::Add` wired into `args`/`commands::mod`.
-Redis is `ci add caching`'s default store as approved — `CacheModule
-.registerAsync` reading `process.env.REDIS_URL`, `@keyv/redis` added to
-`package.json`, `REDIS_URL=redis://localhost:6379` appended to
-`.env`/`.env.example`. Verified: 60 tests passing (13 new — `patch.rs`'s
-four primitives unit-tested against small fixtures, both subcommands
-integration-tested against *real* `init` template output via
-`templates::starter_files(...)` rather than hand-typed fixtures, plus an
-idempotency test per subcommand), and a real `ci init` → `ci add
-validation` → `ci add caching` → re-run-both run confirming the generated
-`main.ts`/`app.module.ts`/`package.json`/`.env` are all correct and that
-re-running reports "already configured" instead of duplicating anything.
+Built as designed below, then adjusted post-ship per follow-up feedback —
+**`ci add caching` renamed to `ci add cache`**, **the example DTO
+dropped** from `ci add validation` (nothing wires it into a route, so it
+was inert), and **dependency installation replaced**: `patch.rs`'s
+original `add_dependencies` (parse `package.json`, merge in a
+hand-guessed semver range) is gone, replaced by
+`install_dependencies` + `detect_package_manager` — shells out to the
+project's real package manager (`npm install <pkgs>`, or `pnpm add`/`yarn
+add` — npm alone doesn't use the `add` verb) so it resolves genuine
+current versions instead of this tool guessing them. Which package
+manager to use is read from `ci/config.json`'s `packageManager` field
+(the same file `db::detect` already reads `orm`/`driver` from), falling
+back to npm if the file's missing or unparseable.
+`PackageManager` moved from `commands::init::args` to
+`shared::package_manager` so both `init` (writing it) and `add` (reading
+it) share one definition.
+
+`src/commands/add/patch.rs`, `validation/` and `cache/` each
+self-contained (own `mod.rs` + `tests.rs`, matching `db`'s per-subcommand
+folders), `Commands::Add` wired into `args`/`commands::mod`. Redis is `ci
+add cache`'s default store as approved — `CacheModule.registerAsync`
+reading `process.env.REDIS_URL`, `@keyv/redis` installed alongside
+`@nestjs/cache-manager`/`cache-manager`, `REDIS_URL=redis://localhost:6379`
+appended to `.env`/`.env.example`. Verified: 64 tests passing (`patch.rs`'s
+primitives unit-tested against small fixtures — including
+`detect_package_manager`'s npm-fallback cases and `install_dependencies`'s
+per-manager verb selection — both subcommands integration-tested against
+*real* `init` template output via `templates::starter_files(...)` rather
+than hand-typed fixtures, an idempotency test per subcommand, and a
+configured-package-manager test per subcommand), plus a real `ci init`
+(pnpm-configured) → `npm install` → `ci add validation` → `ci add cache`
+run against an actual npm registry, confirming real installed versions
+(e.g. `class-validator ^0.15.1`, all newer than this plan's original
+hardcoded guesses — direct evidence the shell-out approach was the right
+call), correct `main.ts`/`app.module.ts`/`.env` patches, and no
+`example.dto.ts` written.
 
 Supersedes the previous version of this file (the event-driven `Ui`/
 `EventBus` plan — shipped, see `src/shared/events.rs`/`src/shared/ui.rs`
@@ -30,7 +51,7 @@ two from the ask:
 
 ```
 ci add validation   # https://docs.nestjs.com/techniques/validation
-ci add caching      # https://docs.nestjs.com/techniques/caching
+ci add cache        # https://docs.nestjs.com/techniques/caching
 ```
 
 `add` is deliberately named for growth — same role `db` plays for
@@ -47,45 +68,58 @@ Every command so far only ever *writes* files — `init` renders fresh
 templates, `db`'s destructive operations shell out to other tools. Not
 one line of this codebase modifies a file that's already there.
 `ci add validation` needs to edit `src/main.ts` (insert a
-`ValidationPipe` global pipe); `ci add caching` needs to edit
-`src/app.module.ts` (insert `CacheModule` into `imports`). Both need to
-edit `package.json` (add dependencies). This is new capability, not a
-mechanical reuse of what `init`/`db` already do — worth its own section
+`ValidationPipe` global pipe); `ci add cache` needs to edit
+`src/app.module.ts` (insert `CacheModule` into `imports`). Both need
+`package.json` updated with new dependencies. This is new capability, not
+a mechanical reuse of what `init`/`db` already do — worth its own section
 before the two subcommands, since both depend on it.
 
-### `package.json`: parse as JSON, merge, done
+### Dependencies: shell out to the real package manager, don't guess versions
 
-Easy case — read it via `ctx.fs.try_read_to_string`, parse with
-`serde_json::Value`, insert into the `dependencies` object, write back
-with `to_string_pretty`. Loses whatever exact formatting the user's
-`package.json` had (key order, if they hand-edited it) but is otherwise
-completely robust — no risk of producing invalid JSON, no anchor-text
-fragility.
+Original draft of this section proposed parsing `package.json` as JSON
+and merging in hand-picked semver ranges directly. Shipped differently,
+per follow-up feedback: shell out to whichever package manager the
+project is configured for (`npm install <pkgs>` — npm has no separate
+`add` verb — or `pnpm add`/`yarn add`, which reserve `install` for
+"install from the lockfile only"), and let *it* resolve and write real
+current versions into `package.json`. Confirmed better in practice: a
+real run resolved `class-validator ^0.15.1`, `@nestjs/cache-manager
+^3.1.3` — both newer than this plan's original guesses.
 
 ```rust
 // src/commands/add/patch.rs
-pub fn add_dependencies(
+pub fn detect_package_manager(ctx: &Context, root: &Path) -> PackageManager {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ProjectConfig {
+        #[serde(default)]
+        package_manager: PackageManager,
+    }
+    ctx.fs
+        .try_read_to_string(&root.join("ci/config.json"))
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<ProjectConfig>(&raw).ok())
+        .map(|config| config.package_manager)
+        .unwrap_or_default() // npm, if ci/config.json is missing or unparseable
+}
+
+pub fn install_dependencies(
     ctx: &Context,
     root: &Path,
-    deps: &[(&str, &str)],
+    package_manager: PackageManager,
+    packages: &[&str],
 ) -> Result<()> {
-    let path = root.join("package.json");
-    let raw = ctx.fs.try_read_to_string(&path)?
-        .ok_or_else(|| anyhow!("{} not found — run this inside a `ci init`-created project", path.display()))?;
-    let mut json: serde_json::Value = serde_json::from_str(&raw)?;
-    let deps_obj = json["dependencies"]
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("package.json has no \"dependencies\" object"))?;
-    for (name, version) in deps {
-        deps_obj.entry(name.to_string()).or_insert_with(|| version.to_string().into());
-    }
-    ctx.fs.write_file(&path, &(serde_json::to_string_pretty(&json)? + "\n"))
+    let mut args = vec![package_manager.add_verb()];
+    args.extend(packages);
+    ctx.commands.run(package_manager.command(), &args, root)
 }
 ```
 
-`.entry(...).or_insert_with(...)` (not overwrite) — idempotent by
-construction: running `ci add validation` twice doesn't stomp a version
-the user bumped by hand in between.
+`PackageManager` (with its new `add_verb()`) moved from
+`commands::init::args` to `shared::package_manager` so both `init`
+(writing `ci/config.json`'s `packageManager` field) and `add` (reading it
+back) share one definition.
 
 ### `main.ts`/`app.module.ts`: anchor-text insertion, not a TS parser
 
@@ -164,23 +198,12 @@ duplicate named import from the same module isn't valid TS, so this needs
 its own small check, not just `insert_after`'s "does this exact line
 exist" idempotency).
 
-**Example DTO template** — new file, not a patch (nothing existing to
-conflict with): `templates/add/validation/example.dto.ts` →
-`src/common/dto/example.dto.ts`, standalone/unwired (no route uses it —
-wiring it into a controller is a `generate` concern this tool doesn't
-have yet), just showing the pattern from the docs:
-
-```typescript
-import { IsEmail, IsNotEmpty } from 'class-validator';
-
-export class ExampleDto {
-  @IsEmail()
-  email: string;
-
-  @IsNotEmpty()
-  password: string;
-}
-```
+**No example DTO.** Originally planned as an unwired
+`src/common/dto/example.dto.ts` "just showing the pattern," but dropped
+before shipping: nothing wires it into a route (this tool has no
+`generate controller` to attach it to non-arbitrarily), so it would just
+be inert dead code sitting in every project this touches. `ci add
+validation`'s whole job ends at making the pipe actually active.
 
 Whitelist/transform options match the docs' "common production config" —
 worth confirming as this project's default rather than the docs' bare
@@ -189,7 +212,7 @@ something production-shaped, not the minimal example.
 
 ---
 
-## `ci add caching`
+## `ci add cache`
 
 Per [the docs](https://docs.nestjs.com/techniques/caching).
 **Redis is the default store** (approved) — not the bare in-memory
@@ -252,10 +275,11 @@ matches how `ConfigModule` is already wired in `init`'s `app.module.ts`
 template, so caching is reachable the same way config already is,
 without every future module needing its own import.
 
-No example-usage file the way validation gets one DTO — the injection
-pattern (`@Inject(CACHE_MANAGER) private cacheManager: Cache`) only makes
-sense inside a real service, and this tool doesn't generate throwaway
-services. `README.md`/doc-comment territory, not a template file.
+No example-usage file (matches `validation`'s DTO getting dropped too) —
+the injection pattern (`@Inject(CACHE_MANAGER) private cacheManager:
+Cache`) only makes sense inside a real service, and this tool doesn't
+generate throwaway services. `README.md`/doc-comment territory, not a
+template file.
 
 Deliberately **not** adding `REDIS_URL` to `src/config/env.validation.ts`'s
 zod schema this pass — that needs a third patch shape (insert into a
@@ -270,28 +294,34 @@ not load-bearing enough yet to justify the extra patch primitive.
 
 ```
 src/commands/add/
-  mod.rs             # dispatch: match Command::Validation/Caching
-  args.rs            # Args { command: Command }; Command::{Validation, Caching}
+  mod.rs             # dispatch: match Command::Validation/Cache
+  args.rs            # Args { command: Command }; Command::{Validation, Cache}
   listeners.rs        # PrintAction wiring, identical to init/update/db's
-  patch.rs            # add_dependencies, insert_after, insert_into_array
+  patch.rs            # detect_package_manager, install_dependencies,
+                       # insert_after, insert_into_array, append_line
   patch/tests.rs
   validation/
-    mod.rs            # run(): add_dependencies + two main.ts inserts + DTO template write
+    mod.rs            # run(): install_dependencies + two main.ts inserts
     tests.rs
-  caching/
-    mod.rs            # run(): add_dependencies + two app.module.ts inserts
+  cache/
+    mod.rs            # run(): install_dependencies + .env append +
+                       # two app.module.ts inserts
     tests.rs
-
-templates/add/validation/example.dto.ts   # new, static (no Tera needed — nothing project-specific)
 ```
 
+No template files under `templates/add/` — both subcommands only ever
+patch existing files or shell out; there was going to be one (the
+example DTO) but it got cut.
+
 Command tags for the event bus (matching `db`'s specific-tag precedent):
-`"add validation"`, `"add caching"`.
+`"add validation"`, `"add cache"`.
 
 No `detect.rs` equivalent needed — `add` doesn't branch on ORM, just
-needs `main.ts`/`app.module.ts`/`package.json` to exist (which
-`patch.rs`'s "not found" errors already cover without a separate
-detection pass).
+needs `main.ts`/`app.module.ts` to exist (which `patch.rs`'s "not found"
+errors already cover without a separate detection pass).
+`detect_package_manager` is a *different* kind of detection — advisory
+(which installer to shell out to), not something worth failing a whole
+run over, so it falls back to npm instead of erroring.
 
 `src/args/mod.rs` gains `Commands::Add(add::Args)`; `src/commands/mod.rs`
 gains the matching dispatch arm — same two-line addition `db` needed when
@@ -320,12 +350,13 @@ erroring).
 
 ## Suggested build order
 
-1. `patch.rs` — `add_dependencies`, `insert_after`, `insert_into_array`,
-   each independently unit-testable against small hand-written fixture
-   strings (not full `main.ts`/`app.module.ts` yet).
+1. `patch.rs` — `detect_package_manager`, `install_dependencies`,
+   `insert_after`, `insert_into_array`, each independently unit-testable
+   against small hand-written fixture strings (not full
+   `main.ts`/`app.module.ts` yet).
 2. `ci add validation` — the simpler of the two patches (one array-less
    insertion point plus one dependency-only file), proves the pattern.
-3. `ci add caching` — the array-insertion case.
+3. `ci add cache` — the array-insertion case.
 4. Wire `Commands::Add` into `args`/`commands::mod`.
 5. Integration tests seeded from real `templates::starter_files(...)`
    output, plus the idempotency tests.
@@ -338,10 +369,10 @@ erroring).
   default; an in-memory or multi-store (`Keyv` + `KeyvCacheableMemory`
   layered with `KeyvRedis`, per the docs) option behind a flag is a
   plausible follow-up, not built now.
-- **Wiring the example DTO into an actual route.** `ci add validation`
-  drops `example.dto.ts` unwired — actually using it needs a controller
-  method to attach it to, and this tool has no `generate controller`
-  command yet to make that not-arbitrary.
+- **An example DTO / example cache-usage file.** Both got planned, both
+  got cut before shipping — nothing wires them into a route or service,
+  and this tool has no `generate controller`/`generate service` command
+  yet to make that not-arbitrary. Revisit once one exists.
 - **A `--force` flag to re-patch even when the idempotency marker is
   found.** Not clearly needed — "already configured, did nothing" seems
   like the right default behavior for re-running `ci add validation` by

@@ -7,4 +7,5 @@ pub mod db_orm;
 pub mod events;
 pub mod fs;
 pub mod json_payload;
+pub mod package_manager;
 pub mod ui;

@@ -11,5 +11,5 @@ pub enum Command {
     /// Wire up class-validator request validation (ValidationPipe)
     Validation,
     /// Wire up Redis-backed caching (@nestjs/cache-manager)
-    Caching,
+    Cache,
 }

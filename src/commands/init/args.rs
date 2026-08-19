@@ -1,7 +1,8 @@
-use clap::{Args as ClapArgs, ValueEnum};
-use serde::{Deserialize, Serialize};
+use clap::Args as ClapArgs;
+use serde::Deserialize;
 
 pub use crate::shared::db_orm::{DbOrm, DrizzleDriver};
+pub use crate::shared::package_manager::PackageManager;
 
 #[derive(ClapArgs, Deserialize, Clone, Debug, Default)]
 pub struct Args {
@@ -32,23 +33,4 @@ pub struct Args {
     #[arg(long)]
     #[serde(default)]
     pub skip_git: bool,
-}
-
-#[derive(Clone, Copy, Debug, Default, ValueEnum, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PackageManager {
-    #[default]
-    Npm,
-    Pnpm,
-    Yarn,
-}
-
-impl PackageManager {
-    pub fn command(self) -> &'static str {
-        match self {
-            PackageManager::Npm => "npm",
-            PackageManager::Pnpm => "pnpm",
-            PackageManager::Yarn => "yarn",
-        }
-    }
 }

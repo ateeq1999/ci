@@ -1,38 +1,54 @@
 //! Editing files that already exist — new capability neither `init` nor
 //! `db` ever needed (both only ever write fresh files or shell out).
-//! `package.json` is real JSON, so it's parsed and merged. `main.ts`/
-//! `app.module.ts` are edited by anchoring on lines `ci` itself wrote via
-//! `init`'s templates — not a general TS parser, since there isn't one
-//! worth pulling in for two insertion points.
+//! `main.ts`/`app.module.ts` are edited by anchoring on lines `ci` itself
+//! wrote via `init`'s templates — not a general TS parser, since there
+//! isn't one worth pulling in for two insertion points. `package.json`
+//! isn't edited directly at all — see `install_dependencies` below.
 
 use std::path::Path;
 
 use anyhow::{Result, anyhow, bail};
+use serde::Deserialize;
 
 use crate::shared::context::Context;
+use crate::shared::package_manager::PackageManager;
 
-/// Adds each `(name, version)` pair to `package.json`'s `dependencies`
-/// object, without overwriting a version already there — idempotent by
-/// construction.
-pub fn add_dependencies(ctx: &Context, root: &Path, deps: &[(&str, &str)]) -> Result<()> {
-    let path = root.join("package.json");
-    let raw = ctx.fs.try_read_to_string(&path)?.ok_or_else(|| {
-        anyhow!(
-            "{} not found — run this inside a `ci init`-created project",
-            path.display()
-        )
-    })?;
-    let mut json: serde_json::Value = serde_json::from_str(&raw)?;
-    let deps_obj = json["dependencies"]
-        .as_object_mut()
-        .ok_or_else(|| anyhow!("package.json has no \"dependencies\" object"))?;
-    for (name, version) in deps {
-        deps_obj
-            .entry(name.to_string())
-            .or_insert_with(|| (*version).into());
+/// Reads `packageManager` out of `<root>/ci/config.json` (the same file
+/// `db::detect` reads `orm`/`driver` from) — falls back to
+/// `PackageManager::default()` (npm) if the file is missing or
+/// unparseable, per the explicit "if not found, use npm" instruction;
+/// this is advisory (which installer to shell out to), not something
+/// worth failing a whole `ci add` run over.
+pub fn detect_package_manager(ctx: &Context, root: &Path) -> PackageManager {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct ProjectConfig {
+        #[serde(default)]
+        package_manager: PackageManager,
     }
+
     ctx.fs
-        .write_file(&path, &(serde_json::to_string_pretty(&json)? + "\n"))
+        .try_read_to_string(&root.join("ci/config.json"))
+        .ok()
+        .flatten()
+        .and_then(|raw| serde_json::from_str::<ProjectConfig>(&raw).ok())
+        .map(|config| config.package_manager)
+        .unwrap_or_default()
+}
+
+/// Installs `packages` with whichever package manager the project is
+/// configured for — not a `package.json` edit of our own; the package
+/// manager itself resolves real versions and writes them in, which is
+/// more correct than this tool guessing a semver range.
+pub fn install_dependencies(
+    ctx: &Context,
+    root: &Path,
+    package_manager: PackageManager,
+    packages: &[&str],
+) -> Result<()> {
+    let mut args = vec![package_manager.add_verb()];
+    args.extend(packages);
+    ctx.commands.run(package_manager.command(), &args, root)
 }
 
 /// Inserts `line` right after the first line containing `anchor`, unless

@@ -1,6 +1,6 @@
 //! `ci add validation` — self-contained: patches `main.ts` to register a
-//! global `ValidationPipe`, adds `class-validator`/`class-transformer`,
-//! drops an example DTO.
+//! global `ValidationPipe`, installs `class-validator`/`class-transformer`
+//! with the project's configured package manager.
 
 use std::path::Path;
 
@@ -16,14 +16,16 @@ const PIPE_BLOCK: &str = "  app.useGlobalPipes(\n    new ValidationPipe({\n     
 
 pub fn run(ctx: &Context, root: &Path, bus: &EventBus) -> Result<()> {
     bus.run("add validation", |events| {
-        events.updated("Adding class-validator and class-transformer");
-        patch::add_dependencies(
+        let package_manager = patch::detect_package_manager(ctx, root);
+        events.updated(format!(
+            "Installing class-validator and class-transformer with {}",
+            package_manager.command()
+        ));
+        patch::install_dependencies(
             ctx,
             root,
-            &[
-                ("class-validator", "^0.14.1"),
-                ("class-transformer", "^0.5.1"),
-            ],
+            package_manager,
+            &["class-validator", "class-transformer"],
         )?;
 
         let main_ts = root.join("src/main.ts");
@@ -42,12 +44,6 @@ pub fn run(ctx: &Context, root: &Path, bus: &EventBus) -> Result<()> {
             "const app = await NestFactory.create(AppModule);",
             "app.useGlobalPipes",
             PIPE_BLOCK,
-        )?;
-
-        events.updated("Adding an example DTO");
-        ctx.fs.write_file(
-            &root.join("src/common/dto/example.dto.ts"),
-            include_str!("../../../../templates/add/validation/example.dto.ts"),
         )?;
 
         Ok(if import_added || pipe_added {
