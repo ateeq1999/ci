@@ -40,7 +40,7 @@ pub fn run(ctx: &Context, root: &Path, bus: &EventBus) -> Result<()> {
         let pipe_added = patch::insert_after(
             ctx,
             &main_ts,
-            "const app = await NestFactory.create(AppModule);",
+            "NestFactory.create",
             "app.useGlobalPipes",
             PIPE_BLOCK,
         )?;

@@ -60,6 +60,14 @@ const FILES: &[(&str, &str)] = &[
         include_str!("../../../templates/init/src/config/env.validation.ts"),
     ),
     (
+        "src/logger/logger.service.ts",
+        include_str!("../../../templates/add/logger/logger.service.ts"),
+    ),
+    (
+        "src/logger/logger.module.ts",
+        include_str!("../../../templates/add/logger/logger.module.ts"),
+    ),
+    (
         "src/database/database.types.ts",
         include_str!("../../../templates/db/database.types.ts"),
     ),

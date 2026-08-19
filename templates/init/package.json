@@ -24,7 +24,8 @@
     "@nestjs/common": "^10.0.0",
     "@nestjs/config": "^3.2.0",
     "@nestjs/core": "^10.0.0",
-    "@nestjs/platform-express": "^10.0.0",
+    "@nestjs/platform-fastify": "^10.0.0",
+    "@fastify/cookie": "^9.3.0",
 {%- if db_orm == "prisma" %}
     "@prisma/client": "^5.14.0",
 {%- elif db_orm == "typeorm" %}
@@ -49,7 +50,6 @@
 {%- elif db_orm == "drizzle" and db_driver == "pg" %}
     "@types/pg": "^8.11.0",
 {%- endif %}
-    "@types/express": "^4.17.0",
     "@types/node": "^20.0.0",
 {%- if db_orm == "prisma" %}
     "prisma": "^5.14.0",

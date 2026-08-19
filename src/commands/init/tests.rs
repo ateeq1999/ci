@@ -230,6 +230,8 @@ fn includes_every_expected_file() {
         "src/app.service.ts",
         "src/app.controller.spec.ts",
         "src/config/env.validation.ts",
+        "src/logger/logger.service.ts",
+        "src/logger/logger.module.ts",
         "src/database/database.types.ts",
         "src/database/database.constants.ts",
         "src/database/database.provider.ts",
@@ -244,6 +246,49 @@ fn includes_every_expected_file() {
             "missing {expected}"
         );
     }
+}
+
+#[test]
+fn defaults_to_fastify_with_cookies_and_a_wired_up_logger() {
+    let files = templates::starter_files("my-api", DbOrm::Drizzle, DrizzleDriver::Pg).unwrap();
+
+    let (_, package_json) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("package.json"))
+        .expect("package.json should be present");
+    assert!(package_json.contains("\"@nestjs/platform-fastify\":"));
+    assert!(package_json.contains("\"@fastify/cookie\":"));
+    assert!(!package_json.contains("@nestjs/platform-express"));
+    assert!(!package_json.contains("@types/express"));
+
+    let (_, main_ts) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/main.ts"))
+        .expect("src/main.ts should be present");
+    assert!(main_ts.contains("FastifyAdapter"));
+    assert!(main_ts.contains("import fastifyCookie from '@fastify/cookie';"));
+    assert!(main_ts.contains("await app.register(fastifyCookie);"));
+    assert!(main_ts.contains("import { AppLogger } from './logger/logger.service';"));
+    assert!(main_ts.contains("app.useLogger(app.get(AppLogger));"));
+
+    let (_, app_module) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/app.module.ts"))
+        .expect("src/app.module.ts should be present");
+    assert!(app_module.contains("import { LoggerModule } from './logger/logger.module';"));
+    assert!(app_module.contains("LoggerModule,"));
+
+    let (_, logger_service) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/logger/logger.service.ts"))
+        .expect("src/logger/logger.service.ts should be present");
+    assert!(logger_service.contains("export class AppLogger extends ConsoleLogger"));
+
+    let (_, logger_module) = files
+        .iter()
+        .find(|(path, _)| path == Path::new("src/logger/logger.module.ts"))
+        .expect("src/logger/logger.module.ts should be present");
+    assert!(logger_module.contains("export class LoggerModule"));
 }
 
 #[test]
