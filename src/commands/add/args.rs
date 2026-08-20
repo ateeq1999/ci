@@ -20,4 +20,6 @@ pub enum Command {
     Logger,
     /// Wire up the event emitter (@nestjs/event-emitter)
     Events,
+    /// Wire up response compression (@fastify/compress)
+    Compression,
 }

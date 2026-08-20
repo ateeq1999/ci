@@ -1,9 +1,10 @@
 //! `ci add` — thin dispatch only, same shape as `db`. Every subcommand
-//! (`validation`/`cache`/`schedule`/`queue`/`logger`/`events`) is its own
-//! self-contained module.
+//! (`validation`/`cache`/`schedule`/`queue`/`logger`/`events`/
+//! `compression`) is its own self-contained module.
 
 mod args;
 mod cache;
+mod compression;
 mod events;
 mod listeners;
 mod logger;
@@ -28,5 +29,6 @@ pub fn run(args: &Args, ctx: &Context) -> anyhow::Result<()> {
         Command::Queue => queue::run(ctx, &root, &bus),
         Command::Logger => logger::run(ctx, &root, &bus),
         Command::Events => events::run(ctx, &root, &bus),
+        Command::Compression => compression::run(ctx, &root, &bus),
     }
 }
