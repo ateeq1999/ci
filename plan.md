@@ -1,83 +1,118 @@
 # Plan: `ci add` — wire NestJS techniques into an existing project
 
-## Status: `validation`/`cache`/`schedule`/`queue`/`logger` all shipped in v0.1.2, plus cross-cutting `ci/history.jsonl` command history
+## Status: `validation`/`cache`/`schedule`/`queue`/`logger`/`events` all shipped in v0.1.2, plus cross-cutting `ci/history.jsonl` command history
 
-## Cross-cutting: `ci/history.jsonl` — a record of every command run against a project
+## Note: `init` moved to Fastify and now bakes the logger in by default
 
-Not an `add` subcommand — a small addition to the event system every
-command (`init`, `db`, `add`) already runs through. Under the project's
-own `ci/` folder, alongside `ci/config.json`, `ci` now keeps an
-append-only log of every project-scoped command it has run and how it
-turned out: one JSON object per line (`ci/history.jsonl`, not a single
-JSON array), so appending never means re-parsing/rewriting the whole
-file. Each line: `{"timestamp": "...", "command": "add cache", "status":
-"success"|"error", "message": "..."}` — `command`/`message` are exactly
-the strings the event system already threads through `EventBus::run` and
-`Finished`/`Error` events, so nothing new had to be invented to know what
-to log.
+Not part of this plan's own work, but load-bearing context for everything
+below it: independently of the `ci add` work this document tracks,
+`init`'s own templates changed —
 
-**Why an `Action`, not a bolt-on wrapper.** `src/shared/events.rs` already
-has the exact seam for this — `Action`, the trait `PrintAction` (prints
-progress) implements, with a comment on `Event` foreshadowing it almost
-verbatim: "not dead... just not consumed by the one `Action` registered
-so far... (timing, logging, ...)." `HistoryAction` (`src/shared/history/
-mod.rs`) is a second `Action`, registered alongside `PrintAction` in every
-project-scoped command's `listeners::bus`. Every command gets history for
-free just by building its bus the way it already did; no command's own
-logic changed to support this.
+- **Express → Fastify.** `templates/init/package.json` now depends on
+  `@nestjs/platform-fastify`/`@fastify/cookie` instead of
+  `@nestjs/platform-express`/`@types/express`; `main.ts` now does
+  `NestFactory.create<NestFastifyApplication>(AppModule, new
+  FastifyAdapter())` and registers `fastifyCookie`.
+- **Every new project gets a logger out of the box**, not just projects
+  that ran `ci add logger`: `commands::init::templates::FILES` now
+  includes the *same* `templates/add/logger/logger.service.ts`/
+  `logger.module.ts` files `ci add logger` writes, and `init`'s own
+  `app.module.ts`/`main.ts` templates wire them up directly —
+  `LoggerModule` in the imports array, `app.useLogger(app.get(AppLogger))`
+  called right after `NestFactory.create`, before `fastifyCookie`
+  registration and `app.listen`.
 
-**Only `Finished`/`Error`, not every event.** "History of commands and
-their status" is about outcomes, not a full progress transcript —
-`Started`/`Updated`/`Warned` are ignored. One entry per command
-invocation, appended when it's over.
+**What this means for `ci add logger`:** it still exists, still works,
+and is now effectively a **backfill/repair** operation rather than an
+opt-in one — running it against a project scaffolded by the current
+`init` immediately reports "already configured" (every idempotency
+marker it checks is already satisfied), verified directly. It remains
+meaningful for projects scaffolded by an older `ci` version, or ones
+where `src/logger/` was deleted by hand. Nothing about `ci add logger`'s
+own code needed to change for this — same reason `ci add cache`/
+`schedule`/`queue`/`events` don't need to change if their own techniques
+were ever similarly promoted to an `init` default later.
 
-**Scoped to commands with a project.** `update` (self-updates the `ci`
-binary itself via `self_update`, never touches a project directory) has
-no root to attach a history entry to, so its `listeners.rs` was left
-alone — no `HistoryAction`, no history. `init`, `db`, and `add` all
-operate on a project root and got one.
+**What this means for anchors:** `main.ts` no longer has the exact line
+`"const app = await NestFactory.create(AppModule);"` `ci add validation`
+originally anchored its pipe insertion on — the generic type parameter
+and `FastifyAdapter` argument changed that line's exact text. Fixed (by
+the same change) by shortening `validation`'s anchor to the substring
+`"NestFactory.create"`, which still matches via `insert_after`'s
+`l.contains(anchor)` regardless of what's inside the parens or angle
+brackets. Every other `add` subcommand's anchors (`await app.listen(`,
+`imports: [`, `import `-prefixed lines) were already loose enough not to
+need any change.
 
-**`init`'s root wasn't known before the event lifecycle started — until
-now.** Every other command computes `root` before building its bus
-(`add`/`db`: `std::env::current_dir()`). `init` didn't: `root` came from
-`args.name`, validated *inside* `bus.run("init", |events| { ... })`'s
-closure, via `args.name.as_deref().context(...)?`. That meant `Started`
-already fired before `root` existed, and if `name` was missing, `root`
-never would. Fixed by hoisting that validation (and the `PathBuf::from
-(name)` computation) *above* `listeners::bus(ctx, &root).run(...)` —
-`listeners::bus` now always has a root to build `HistoryAction` with. If
-`name` truly is missing, there's no project to attach a history entry to
-at all — that failure is still reported exactly as before (`` `name` is
-required... ``), just without ever constructing a bus for it. No test
-depended on the old ordering (`init::tests::errors_when_name_missing`
-only asserts on the error text), so this was a safe, small refactor.
+**Why `ci add events` wasn't also baked into `init`.** Unlike a logger
+(near-universally wanted, low-risk to have active and unused), an
+in-process event emitter is a genuinely opt-in architectural choice — not
+every project wants pub/sub-style decoupling internally, and registering
+`EventEmitterModule.forRoot()` unconditionally would be a bigger,
+unrequested default to impose than this plan's job covers. Stayed a pure
+`ci add` subcommand, same as `validation`/`cache`/`schedule`/`queue`.
 
-**Best-effort, deliberately.** A history *write* failure (read-only
-filesystem, full disk, permissions) must never turn an otherwise
-successful command into a failure just because its own record of success
-couldn't be written. `HistoryAction::append` swallows both the
-(practically-never-fails) serialization step and the real write step
-silently, on purpose — this is the one place in the whole codebase that
-intentionally ignores a `Result` rather than propagating it, and it's
-called out with a comment explaining why, not left as an unexplained
-`let _ =`.
+---
 
-**Gitignored, not committed.** `ci/config.json` is team-shared config and
-stays tracked; `ci/history.jsonl` changes on every single `ci` invocation
-and is fundamentally a local execution log, not shared state — same
-category `*.log` is already in. `templates/init/.gitignore` gained one
-new line, `ci/history.jsonl`.
+## `ci add events`: shipped in v0.1.2
 
-Verified: 5 new tests in `src/shared/history/tests.rs` (a `Finished`
-event records a `"success"` entry, an `Error` event records `"error"`,
-`Started`/`Updated`/`Warned` are all ignored, multiple commands append
-rather than each overwriting the file, and each line parses as its own
-independent JSON object — this is JSONL, not a JSON array). Plus a real
-run: `ci init` → `ci add validation` → `ci add logger` → (`.env` moved
-aside) `ci db migrate fresh` against an actual scaffolded project,
-confirming `ci/history.jsonl` accumulated one correctly-shaped line per
-command — three `"success"` entries and one `"error"` entry with the
-real `.env not found` message — in call order.
+Per [the docs](https://docs.nestjs.com/techniques/events), which cover
+`@nestjs/event-emitter` — a thin wrapper (`eventemitter2` underneath) for
+in-process pub/sub: `EventEmitter2.emit(...)` to fire an event,
+`@OnEvent(...)` decorated methods to react to one.
+
+**Dependencies: `@nestjs/event-emitter` only.** Confirmed via `npm view
+@nestjs/event-emitter dependencies` before writing this: `eventemitter2`
+is a real (non-peer) dependency of the Nest wrapper package, so it
+arrives transitively — no need to list it in `install_dependencies`
+separately, same shape as `class-validator`+`class-transformer` both
+needing to be listed explicitly (peers of `@nestjs/common`, not of each
+other) versus this case (one package pulls the other in on its own).
+
+**`app.module.ts` patch** — one import, one array entry, both idempotent
+(`"import { EventEmitterModule }"` for the import,
+`"EventEmitterModule.forRoot"` — not the looser `"EventEmitterModule"` —
+for the array entry, same "the import line's own text would falsely
+satisfy the marker" trap `cache`/`schedule`/`logger` already avoid):
+
+```typescript
+import { EventEmitterModule } from '@nestjs/event-emitter';
+```
+
+```typescript
+EventEmitterModule.forRoot(),
+```
+
+Bare `.forRoot()`, no config object — the docs show `wildcard`/
+`delimiter`/`maxListeners`/etc. as available options, but defaults are
+sane and there's no second concrete option to choose between yet (same
+"don't build the flag until something needs it" reasoning already
+applied to cache's `--store` and logger's `LOG_LEVEL`).
+
+**No `.env` changes** — nothing about the event emitter is
+environment-driven, matching `schedule`.
+
+**No example emitted event, event class, or `@OnEvent()` listener.**
+Same boundary every `add` subcommand already draws: what a project
+actually emits/listens for is business-specific; `ci add events`'s job
+ends at making `EventEmitter2` injectable and `@OnEvent()` usable.
+
+No new patch primitives — reuses `install_dependencies`,
+`insert_after_last_import`, `insert_into_array`, the exact same shape
+`ci add schedule` already uses (one dependency, one import, one bare
+`.forRoot()` array entry, no `.env`).
+
+Verified: `src/commands/add/events/tests.rs` (installs the right package,
+patches `app.module.ts` correctly against real `init` output including
+the now-baked-in `LoggerModule` import already present; idempotency;
+configured-package-manager; a stacking test running `schedule` then
+`events` and asserting import order), plus a real `ci init` (Fastify +
+baked-in logger) → `ci add events` run against the actual npm registry —
+confirmed the real resolved version (`@nestjs/event-emitter ^3.1.0`,
+matching the `npm view` check above), correct `app.module.ts` output
+stacking after the pre-existing `LoggerModule` import, a clean second run
+reporting "already configured" with no duplication, and both runs
+recorded correctly in `ci/history.jsonl`.
 
 ---
 
@@ -86,6 +121,11 @@ real `.env not found` message — in call order.
 Per [the docs](https://docs.nestjs.com/techniques/logger). **Default
 logger is console** (per the ask) — NestJS's own built-in `ConsoleLogger`,
 not Winston/Pino/any external logging library.
+
+*Now also the `init` default — see the note at the top of this document.
+Everything below describes the subcommand as built; it still works
+exactly as described, just against a smaller set of projects that don't
+already have it.*
 
 **Dependencies: none.** `ConsoleLogger`/`Injectable`/`Global`/`Module` all
 ship in `@nestjs/common`, already present in every `init`-generated
@@ -130,8 +170,8 @@ one place DB config lives.
 `"LoggerModule,"` for the array insertion (not the looser `"LoggerModule"`
 — that substring is also in the import line, which would make the array
 check pass falsely and skip its own insertion; same trap `cache`/
-`schedule` already avoid with `"CacheModule.registerAsync"`/
-`"ScheduleModule.forRoot"`):
+`schedule`/`events` already avoid with `"CacheModule.registerAsync"`/
+`"ScheduleModule.forRoot"`/`"EventEmitterModule.forRoot"`):
 
 ```typescript
 import { LoggerModule } from './logger/logger.module';
@@ -172,10 +212,13 @@ pub fn insert_before(
 
 Because `validation`'s pipe anchors high (right after `NestFactory.create`)
 and `logger`'s `useLogger` anchors low (right before `app.listen`), the
-two can never collide or reorder each other no matter which runs first —
-`main.ts` ends up with `NestFactory.create` → pipe → `useLogger` →
-`listen` every time. Verified directly: a real run produced exactly that
-order.
+two can never collide or reorder each other no matter which runs first.
+(`init`'s own baked-in logger wiring, added later, independently landed
+its `useLogger` call in the *high* position instead — right after
+`NestFactory.create`, before `fastifyCookie` registration — since it's
+written directly into the template rather than patched in relative to
+`app.listen`; no conflict either way, since the marker check is just "is
+`app.useLogger` anywhere in the file," not "is it at a specific line.")
 
 `import { AppLogger } from './logger/logger.service';` uses
 `insert_after_last_import` (retrofitting `main.ts`'s import handling to
@@ -190,120 +233,82 @@ bufferLogs: true })` plus an early `app.useLogger(...)` call. The first
 half means *modifying* an existing line's arguments, not inserting new
 content next to it — every patch primitive `ci` has (`insert_after`/
 `insert_before`/`insert_after_last_import`/`insert_into_array`/
-`append_line`) only ever inserts, none rewrites a line in place. Skipped
-for v1: the gap is genuinely small (Nest's own internal startup messages
-already print via the default console logger either way; only messages
-Nest itself emits *before* `app.useLogger()` runs would differ, and
-`AppLogger` doesn't change formatting from stock `ConsoleLogger` yet), and
-"edit an existing line" is new, different-shaped capability worth its own
-justification later rather than smuggling in alongside this subcommand.
+`append_line`) only ever inserts, none rewrites a line in place.
 
 **No example log call, no `LOG_LEVEL` env var, no per-context
 configuration.** Same boundary every other `add` subcommand already
-draws: `ci add logger`'s job ends at making `AppLogger` active and
-injectable; what a project logs, at what level, is business-specific.
+draws.
 
 **Writing genuinely new files needs its own idempotency shape.**
-`logger` is the first `add` subcommand that creates brand-new files
-(`logger.service.ts`/`logger.module.ts`) rather than only patching
-existing ones — `insert_after`-style "does this exact content already
-exist" doesn't apply to a whole file. New primitive:
+`logger` is the first `add` subcommand (and, since `init` also reuses its
+templates now, the first *any* command) that creates brand-new files
+rather than only patching existing ones:
 
 ```rust
 // src/commands/add/patch.rs
-/// Writes `contents` to `path` only if nothing is there yet. Returns
-/// `Ok(false)` without touching the file if something's already there,
-/// so re-running doesn't clobber whatever a project did with the file
-/// since it was first generated.
-pub fn write_file_if_absent(ctx: &Context, path: &Path, contents: &str) -> Result<bool> { /* ... */ }
+pub fn write_file_if_absent(ctx: &Context, path: &Path, contents: &str) -> Result<bool> {
+    if ctx.fs.try_read_to_string(path)?.is_some() {
+        return Ok(false);
+    }
+    ctx.fs.write_file(path, contents)?;
+    Ok(true)
+}
 ```
 
-Verified directly: hand-edit `logger.service.ts` after the first
-`ci add logger` run, run it again, confirm the hand edit survives
-untouched.
+Returns `Ok(false)` (not an overwrite) when the file's already there —
+re-running `ci add logger` must never clobber hand edits made to
+`logger.service.ts` since it was first generated (by `init` or by
+`ci add logger` itself). Verified directly with a test that hand-edits
+the file, re-runs, and asserts the hand edit survives untouched.
 
 Naming: **`logger`, not `log`.** `log` reads as a verb/action (matching
 neither the docs' title, "Logger," nor this family's established pattern
-of naming the *artifact* being wired in — `validation`, `cache`,
-`schedule`, `queue` are all nouns for the thing that gets active, never a
-verb). `logger` also matches the class this subcommand actually creates,
-`LoggerModule`, the same way `cache` matches `CacheModule`.
-
-Verified: `src/commands/add/logger/tests.rs` (writes both files and
-patches both `app.module.ts`/`main.ts` correctly against real `init`
-output; a stacking test running `validation` then `logger` and asserting
-`NestFactory.create` → pipe → `useLogger` → `listen` order; an
-idempotency test; the hand-edit-survives test above), plus a real
-`ci init` → `ci add validation` → `ci add logger` run confirming zero
-`npm install` calls, correct file contents, and the exact statement
-ordering above in the generated `main.ts`.
-
-### Cross-cutting fix that came out of building `logger`: `main.ts` imports needed the same treatment as `app.module.ts`'s
-
-`validation`'s own import insertion (`import { ValidationPipe } from
-'@nestjs/common';`) used to anchor on the literal `"import { NestFactory }
-from '@nestjs/core';"` line — the same fixed-anchor shape `cache` used to
-use for `app.module.ts`, and the same class of bug: once `logger` also
-needed to add an import to `main.ts`, two subcommands anchoring on the
-same fixed line would collide exactly like `app.module.ts`'s imports
-used to. Rather than reinvent the fix, `validation`'s import insertion
-was retrofitted onto `insert_after_last_import` (already generic — it
-works on any file, not just `app.module.ts`) at the same time `logger`
-was built, so it's now *the* way any `add` subcommand adds an import
-line anywhere, full stop.
+of naming the *artifact* being wired in). `logger` also matches the class
+this subcommand actually creates, `LoggerModule`.
 
 ---
 
 ## `schedule`/`queue`: shipped in v0.1.2
 
-Built as designed below. `insert_after_last_import` added to `patch.rs`
-first (the ordering-bug fix), with `cache`'s import insertion retrofitted
-onto it in the same change; `schedule` and `queue` then built on top,
-each its own self-contained folder (`mod.rs`+`tests.rs`), matching
-`validation`/`cache`. `Command::{Schedule, Queue}` wired into
-`add::args`/`add::mod`.
+`insert_after_last_import` added to `patch.rs` first (the ordering-bug
+fix), with `cache`'s import insertion retrofitted onto it in the same
+change; `schedule` and `queue` then built on top, each its own
+self-contained folder (`mod.rs`+`tests.rs`), matching `validation`/
+`cache`.
 
-Verified: plus a real end-to-end run: `ci init` → `ci add cache` → `ci add
+Verified with a real end-to-end run: `ci init` → `ci add cache` → `ci add
 schedule` → `ci add queue` against the actual npm registry, confirming
 real resolved versions (`@nestjs/schedule ^6.1.3`, `@nestjs/bullmq
 ^11.0.5`, `bullmq ^6.1.2`, `ioredis ^6.0.0`), a single `REDIS_URL=` line
 in `.env`/`.env.example` shared correctly between `cache` and `queue`,
-imports landing in run order (`DatabaseModule` → `CacheModule` →
-`ScheduleModule` → `BullModule`) rather than colliding on one fixed
-anchor, and re-running all three a second time reporting "already
-configured" with zero duplicate imports/module entries/env lines.
+imports landing in run order rather than colliding on one fixed anchor,
+and re-running all three a second time reporting "already configured"
+with zero duplication.
 
 ## `validation`/`cache`: shipped in v0.1.2
 
 Built as designed below, then adjusted post-ship per follow-up feedback —
 **`ci add caching` renamed to `ci add cache`**, **the example DTO
-dropped** from `ci add validation` (nothing wires it into a route, so it
-was inert), and **dependency installation replaced**: `patch.rs`'s
-original `add_dependencies` (parse `package.json`, merge in a
-hand-guessed semver range) is gone, replaced by
-`install_dependencies` + `detect_package_manager` — shells out to the
-project's real package manager (`npm install <pkgs>`, or `pnpm add`/`yarn
-add` — npm alone doesn't use the `add` verb) so it resolves genuine
-current versions instead of this tool guessing them. Which package
-manager to use is read from `ci/config.json`'s `packageManager` field
-(the same file `db::detect` already reads `orm`/`driver` from), falling
-back to npm if the file's missing or unparseable.
-`PackageManager` moved from `commands::init::args` to
-`shared::package_manager` so both `init` (writing it) and `add` (reading
-it) share one definition.
+dropped** from `ci add validation`, and **dependency installation
+replaced**: `patch.rs`'s original `add_dependencies` (parse
+`package.json`, merge in a hand-guessed semver range) is gone, replaced
+by `install_dependencies` + `detect_package_manager` — shells out to the
+project's real package manager so it resolves genuine current versions.
+Which package manager to use is read from `ci/config.json`'s
+`packageManager` field, falling back to npm if the file's missing or
+unparseable. `PackageManager` moved from `commands::init::args` to
+`shared::package_manager` so both `init` and `add` share one definition.
 
-`src/commands/add/patch.rs`, `validation/` and `cache/` each
-self-contained (own `mod.rs` + `tests.rs`, matching `db`'s per-subcommand
-folders), `Commands::Add` wired into `args`/`commands::mod`. Redis is `ci
-add cache`'s default store as approved — `CacheModule.registerAsync`
-reading `process.env.REDIS_URL`, `@keyv/redis` installed alongside
-`@nestjs/cache-manager`/`cache-manager`, `REDIS_URL=redis://localhost:6379`
-appended to `.env`/`.env.example`.
+Redis is `ci add cache`'s default store as approved —
+`CacheModule.registerAsync` reading `process.env.REDIS_URL`,
+`@keyv/redis` installed alongside `@nestjs/cache-manager`/
+`cache-manager`, `REDIS_URL=redis://localhost:6379` appended to
+`.env`/`.env.example`.
 
 Supersedes the previous version of this file (the event-driven `Ui`/
 `EventBus` plan — shipped, see `src/shared/events.rs`/`src/shared/ui.rs`
 and every command's `listeners.rs`; this doc's job there is done — and
-now the seam that `ci/history.jsonl` above hangs off).
+now the seam that `ci/history.jsonl` below hangs off).
 
 ## Goal
 
@@ -315,7 +320,8 @@ ci add validation   # https://docs.nestjs.com/techniques/validation      — shi
 ci add cache        # https://docs.nestjs.com/techniques/caching         — shipped
 ci add schedule     # https://docs.nestjs.com/techniques/task-scheduling — shipped
 ci add queue        # https://docs.nestjs.com/techniques/queues          — shipped
-ci add logger       # https://docs.nestjs.com/techniques/logger          — shipped
+ci add logger       # https://docs.nestjs.com/techniques/logger          — shipped (also now an init default)
+ci add events       # https://docs.nestjs.com/techniques/events          — shipped
 ```
 
 `add` is deliberately named for growth — same role `db` plays for
@@ -324,7 +330,7 @@ Future candidates (not built now): `ci add swagger`, `ci add throttling`,
 `ci add health-check`. Each becomes its own self-contained folder under
 `src/commands/add/`, the same shape `db`'s five subcommands already use.
 
-### Naming: `schedule`/`queue`/`logger`, not `task`/`crons`/`queues`/`log`
+### Naming: `schedule`/`queue`/`logger`/`events`, not `task`/`crons`/`queues`/`log`/`event`
 
 The ask floated `ci add task`, `ci add crons`, `ci add queues` for the
 first pair, and `ci add logger`/`ci add log` for the third. Went with the
@@ -334,19 +340,24 @@ package name, and always names the *artifact*, never an action):
 
 - **`schedule`, not `task` or `crons`.** NestJS's own doc title and npm
   package are both "Task Scheduling" / `@nestjs/schedule` — `schedule`
-  matches the package name exactly. `crons` undersells the feature (the
-  module also covers `@Interval()` and `@Timeout()`, not just cron
-  expressions) and is grammatically off as a subcommand noun. `task` is
-  the vaguest of the three — could mean anything in a CLI.
-- **`queue`, not `queues`.** Singular, matching `cache` (not `caches`)
-  and `db`/`add` themselves. The underlying feature is plural-natured
-  (multiple named queues), but the *subcommand* wires up one thing: queue
-  infrastructure for the project.
-- **`logger`, not `log`.** `log` reads as a verb/action, breaking the
-  pattern every other subcommand follows (name the artifact: the
-  `ValidationPipe`, the `CacheModule`, the `ScheduleModule`, the
-  `BullModule`). `logger` matches both the docs' title ("Logger") and the
-  class this subcommand actually creates, `LoggerModule`.
+  matches the package name exactly.
+- **`queue`, not `queues`.** Singular, matching `cache`/`db`/`add`
+  themselves — the *subcommand* wires up one thing: queue infrastructure
+  for the project.
+- **`logger`, not `log`.** `log` reads as a verb/action; `logger` matches
+  both the docs' title ("Logger") and the class this subcommand actually
+  creates, `LoggerModule`.
+- **`events`, not `event`.** The one break from "always singular" in this
+  family, deliberately: the docs' own title is "Events" (plural), the npm
+  package is `@nestjs/event-emitter`, and unlike `cache`/`queue` —
+  already-natural general/mass nouns on their own ("a cache," "a queue")
+  — `event` alone reads as *one specific occurrence*, not a capability
+  name; a user typing `ci add event` would reasonably expect it to
+  scaffold one particular event, not turn events on project-wide.
+  `events` doesn't have that ambiguity and matches the docs exactly.
+  (`event-emitter`, matching the npm package name exactly the way
+  `schedule` does, was the other real candidate — passed over only for
+  length; `events` says the same thing shorter.)
 
 ---
 
@@ -355,26 +366,28 @@ package name, and always names the *artifact*, never an action):
 Every command so far only ever *writes* files — `init` renders fresh
 templates, `db`'s destructive operations shell out to other tools. Not
 one line of this codebase modifies a file that's already there.
-`ci add validation` needs to edit `src/main.ts` (insert a
-`ValidationPipe` global pipe); `ci add cache` needs to edit
-`src/app.module.ts` (insert `CacheModule` into `imports`). Both need
-`package.json` updated with new dependencies. This is new capability, not
-a mechanical reuse of what `init`/`db` already do — worth its own section
-before the subcommands, since all of them depend on it.
+`ci add validation` needs to edit `src/main.ts`; `ci add cache` needs to
+edit `src/app.module.ts`. Both need `package.json` updated with new
+dependencies. This is new capability, not a mechanical reuse of what
+`init`/`db` already do — worth its own section before the subcommands,
+since all of them depend on it.
 
 ### Dependencies: shell out to the real package manager, don't guess versions
 
-Original draft of this section proposed parsing `package.json` as JSON
-and merging in hand-picked semver ranges directly. Shipped differently,
-per follow-up feedback: shell out to whichever package manager the
-project is configured for (`npm install <pkgs>` — npm has no separate
-`add` verb — or `pnpm add`/`yarn add`, which reserve `install` for
-"install from the lockfile only"), and let *it* resolve and write real
-current versions into `package.json`. Confirmed better in practice: real
-runs resolved `class-validator ^0.15.1`, `@nestjs/cache-manager ^3.1.3`,
-`@nestjs/schedule ^6.1.3`, `@nestjs/bullmq ^11.0.5` — all newer than this
-plan's original guesses. `ci add logger` is the one exception: it needs
-no dependencies at all, so it never calls `install_dependencies`.
+Shell out to whichever package manager the project is configured for
+(`npm install <pkgs>` — npm has no separate `add` verb — or `pnpm add`/
+`yarn add`), and let *it* resolve and write real current versions into
+`package.json`. Confirmed better in practice across every subcommand
+built so far: real runs resolved `class-validator ^0.15.1`,
+`@nestjs/cache-manager ^3.1.3`, `@nestjs/schedule ^6.1.3`, `@nestjs/bullmq
+^11.0.5`, `@nestjs/event-emitter ^3.1.0` — all newer than this plan's
+original guesses. `ci add logger` is the one exception: it needs no
+dependencies at all, so it never calls `install_dependencies`.
+`ci add events` needed one extra check before shipping: confirming
+`eventemitter2` (the library `@nestjs/event-emitter` wraps) is a *real*
+dependency of that package, not a peer — `npm view @nestjs/event-emitter
+dependencies` before writing any code, so it doesn't need listing
+separately.
 
 ```rust
 // src/commands/add/patch.rs
@@ -406,24 +419,17 @@ pub fn install_dependencies(
 }
 ```
 
-`PackageManager` (with its new `add_verb()`) moved from
-`commands::init::args` to `shared::package_manager` so both `init`
-(writing `ci/config.json`'s `packageManager` field) and `add` (reading it
-back) share one definition.
-
 ### `main.ts`/`app.module.ts`: anchor-text insertion, not a TS parser
 
 No TS AST tooling in Rust worth pulling in for a handful of insertion
-points. But `ci` already knows *exactly* what these files look like — it
-wrote them with `init`'s templates. Anchor on a known line from that
-template, not a general parse:
+points. `ci` already knows *roughly* what these files look like — it
+wrote them (or `init` did) from a known template. Anchor on a known
+substring, not a general parse — loose enough to survive `main.ts`
+changing shape later (as it did, independently, for the Fastify switch —
+see the note at the top of this document):
 
 ```rust
 // src/commands/add/patch.rs
-/// Inserts `line` right after the first line containing `anchor`, unless
-/// `already_present_marker` is already in the file — idempotent, and
-/// errors clearly instead of guessing if the anchor isn't found (e.g.
-/// someone hand-edited the file away from what `init` generated).
 pub fn insert_after(
     ctx: &Context,
     path: &Path,
@@ -433,31 +439,19 @@ pub fn insert_after(
 ) -> Result<bool> { /* ... */ }
 ```
 
-Returns `Ok(false)` for "already there" rather than erroring — `ci add
-validation` run twice should say "already configured," not fail.
+Returns `Ok(false)` for "already there" rather than erroring.
 
 ### Multiple subcommands patching the same file: anchor on the *last* import, not a fixed line
 
-Found while designing `ci add queue`, before writing any code for it:
-`cache` inserted its import line right after one fixed anchor —
-`import { DatabaseModule } from './database/database.module';`. If
-`schedule` and `queue` did the same, running more than one of
-`cache`/`schedule`/`queue` against the same project would insert every
-subcommand's import at that *same* fixed position — each new `add` run
-would land its import right after `DatabaseModule`, ahead of whatever a
-previous run had already put there, instead of appending after it. Still
-syntactically valid TypeScript, but the insertion order silently depends
-on nothing to do with the user's actual `ci add` sequence.
-
-Fix: a primitive that anchors dynamically on whichever import line is
-currently *last*, not on a fixed string:
+Found while designing `ci add queue`: `cache` inserted its import line
+right after one fixed anchor (`DatabaseModule`'s import). If `schedule`
+and `queue` did the same, every subcommand's import would land at that
+*same* fixed position — each new `add` run landing ahead of whatever a
+previous run had already put there. Fix: a primitive that anchors
+dynamically on whichever import line is currently *last*:
 
 ```rust
 // src/commands/add/patch.rs
-/// Inserts `lines` right after the last line starting with `import `,
-/// rather than a fixed anchor — so each successive `ci add` subcommand's
-/// import lands after whatever the previous one inserted, not always in
-/// the same fixed spot. Same idempotency-marker contract as `insert_after`.
 pub fn insert_after_last_import(
     ctx: &Context,
     path: &Path,
@@ -466,29 +460,23 @@ pub fn insert_after_last_import(
 ) -> Result<bool> { /* rposition on l.trim_start().starts_with("import "), insert after it */ }
 ```
 
-Retrofitted onto **both** files that see multiple subcommands:
-`cache`/`schedule`/`queue`/`logger`'s `app.module.ts` import insertions,
-and (once `logger` needed a second `main.ts` import) `validation`/
-`logger`'s `main.ts` import insertions too — see `ci add logger`'s
-section above for how that second retrofit came about.
+Retrofitted onto every subcommand that patches `app.module.ts`
+(`cache`/`schedule`/`queue`/`logger`/`events`) and both subcommands that
+patch `main.ts` (`validation`/`logger`) — it's now *the* way any `add`
+subcommand adds an import line anywhere, full stop.
 
-`insert_into_array` (the `imports: [...]` array insertion) needs no
-equivalent treatment — array insertion already targets "right after `[`,"
-which is inherently order-stable across multiple subcommands: each new
-entry lands at the front of the array, and array element order doesn't
-carry the same "reads top-to-bottom as written" expectation import
-statements do.
+`insert_into_array` needs no equivalent treatment — array insertion
+already targets "right after `[`," inherently order-stable since array
+element order doesn't carry the same "reads top-to-bottom" expectation
+import statements do.
 
 ### Statements that must stay *last*, not first: `insert_before`
 
-`app.module.ts`'s imports and `main.ts`'s original single insertion
-(`validation`'s pipe) both wanted "stack after whatever came before,"
-solved by anchoring dynamically on the last import. `ci add logger`'s
-`app.useLogger(...)` call is different: it needs to run somewhere between
-`NestFactory.create` and `app.listen`, and rather than build a second
+`ci add logger`'s `app.useLogger(...)` call needs to run somewhere
+between `NestFactory.create` and `app.listen`. Rather than build a second
 dynamic "last statement" tracker, it anchors on `await app.listen(` — a
-distinct, stable anchor no other subcommand touches — and a new
-`insert_before` inserts directly above it:
+distinct, stable anchor no other subcommand touches — and `insert_before`
+inserts directly above it:
 
 ```rust
 // src/commands/add/patch.rs
@@ -503,15 +491,13 @@ pub fn insert_before(
 
 Because `validation`'s pipe anchors high and `logger`'s `useLogger`
 anchors low, on two different lines that never move relative to each
-other, the two can't collide regardless of which subcommand runs first —
-no dynamic tracking needed for this case.
+other, the two can't collide regardless of which subcommand runs first.
 
 ### Writing brand-new files: `write_file_if_absent`
 
-`ci add logger` is the first `add` subcommand that creates whole new
-files (`src/logger/logger.service.ts`/`logger.module.ts`) rather than
-only patching existing ones. None of the insertion primitives apply to
-"does this whole file already exist" — a dedicated primitive:
+`ci add logger` needed a primitive for "does this whole file already
+exist" (`init` later reused the same underlying template files, for the
+same reason):
 
 ```rust
 // src/commands/add/patch.rs
@@ -524,23 +510,14 @@ pub fn write_file_if_absent(ctx: &Context, path: &Path, contents: &str) -> Resul
 }
 ```
 
-Returns `Ok(false)` (not an overwrite) when the file's already there —
-re-running `ci add logger` must never clobber hand edits made to
-`logger.service.ts` since it was first generated. Verified directly with
-a test that hand-edits the file, re-runs, and asserts the hand edit
-survives untouched.
-
 ---
 
 ## `ci add validation`
 
-Per [the docs](https://docs.nestjs.com/techniques/validation):
+Per [the docs](https://docs.nestjs.com/techniques/validation).
+**Dependencies:** `class-validator`, `class-transformer`.
 
-**Dependencies:** `class-validator`, `class-transformer` (`ValidationPipe`
-itself ships in `@nestjs/common`, already a dependency).
-
-**`main.ts` patch** — insert right after
-`const app = await NestFactory.create(AppModule);`:
+**`main.ts` patch** — insert right after the `NestFactory.create` line:
 
 ```typescript
 app.useGlobalPipes(
@@ -553,20 +530,12 @@ app.useGlobalPipes(
 ```
 
 Plus `import { ValidationPipe } from '@nestjs/common';`, via
-`insert_after_last_import` (retrofitted from a fixed `NestFactory` anchor
-once `logger` needed a second `main.ts` import — see above).
+`insert_after_last_import`.
 
-**No example DTO.** Originally planned as an unwired
-`src/common/dto/example.dto.ts` "just showing the pattern," but dropped
-before shipping: nothing wires it into a route (this tool has no
+**No example DTO.** Nothing wires it into a route (this tool has no
 `generate controller` to attach it to non-arbitrarily), so it would just
-be inert dead code sitting in every project this touches. `ci add
-validation`'s whole job ends at making the pipe actually active.
-
-Whitelist/transform options match the docs' "common production config" —
-worth confirming as this project's default rather than the docs' bare
-`new ValidationPipe()`, since a scaffolding tool should hand over
-something production-shaped, not the minimal example.
+be inert dead code. `ci add validation`'s whole job ends at making the
+pipe actually active.
 
 ---
 
@@ -577,113 +546,64 @@ Per [the docs](https://docs.nestjs.com/techniques/caching).
 `CacheModule.register()` the docs lead with.
 
 **Dependencies:** `@nestjs/cache-manager`, `cache-manager`, `@keyv/redis`.
-No `keyv`/`KeyvCacheableMemory` needed — those are for the docs' *multi*-
-store example (in-memory + Redis fallback layered together); a
-Redis-only default has exactly one entry in `stores`, `new KeyvRedis(...)`
-directly, no `Keyv` wrapper around it.
 
-**`.env.example`/`.env` gets a new line**, same append-only shape as
-`ci init` already writing `DATABASE_URL`:
+**`.env.example`/`.env` gets a new line:**
 
 ```
 REDIS_URL=redis://localhost:6379
 ```
 
-**`app.module.ts` patch** — two insertions, both idempotent-checked on
-`"CacheModule"`/`"CacheModule.registerAsync"`:
-1. `import { CacheModule } from '@nestjs/cache-manager';` and
-   `import { KeyvRedis } from '@keyv/redis';`, via `insert_after_last_import`.
-2. Into the `imports: [...]` array:
-   ```typescript
-   CacheModule.registerAsync({
-     isGlobal: true,
-     useFactory: async () => ({
-       stores: [new KeyvRedis(process.env.REDIS_URL ?? 'redis://localhost:6379')],
-     }),
-   }),
-   ```
-   `registerAsync`+`useFactory`, not the synchronous `register()` the
-   docs lead with — needed either way once the store depends on an env
-   var read at startup, redis-default or not. Reads `process.env` raw
-   rather than injecting `ConfigService` (matching `data-source.ts`'s
-   existing `process.env.DATABASE_URL` precedent for TypeORM) — simpler
-   `useFactory` signature (no `inject: [ConfigService]`), and
-   `ConfigModule.forRoot()` already populated `process.env` via dotenv
-   before any other module's factory runs.
+**`app.module.ts` patch:**
 
-`isGlobal: true` (not per-module `register()` on `AppModule` alone) —
-matches how `ConfigModule` is already wired in `init`'s `app.module.ts`
-template, so caching is reachable the same way config already is,
-without every future module needing its own import.
+```typescript
+CacheModule.registerAsync({
+  isGlobal: true,
+  useFactory: async () => ({
+    stores: [new KeyvRedis(process.env.REDIS_URL ?? 'redis://localhost:6379')],
+  }),
+}),
+```
 
-No example-usage file (matches `validation`'s DTO getting dropped too) —
-the injection pattern (`@Inject(CACHE_MANAGER) private cacheManager:
-Cache`) only makes sense inside a real service, and this tool doesn't
-generate throwaway services.
+`registerAsync`+`useFactory`, not the synchronous `register()` the docs
+lead with — needed once the store depends on an env var read at startup.
 
-Deliberately **not** adding `REDIS_URL` to `src/config/env.validation.ts`'s
-zod schema — that needs a third patch shape (insert into a
-`z.object({...})` call), and unlike `DATABASE_URL` (which every ORM's
-provider fails hard without), a missing `REDIS_URL` just falls back to
-`redis://localhost:6379` at the `useFactory` call site above, so it's
-not load-bearing enough to justify the extra patch primitive.
+No example-usage file. Deliberately not adding `REDIS_URL` to the zod env
+schema — a missing value just falls back to `localhost:6379` at the
+`useFactory` call site, not load-bearing enough to justify a third patch
+shape.
 
 ---
 
 ## `ci add schedule`
 
 Per [the docs](https://docs.nestjs.com/techniques/task-scheduling).
-
-**Dependencies:** `@nestjs/schedule`. Nothing else — `@Cron()`/
-`@Interval()`/`@Timeout()` and `SchedulerRegistry` all ship inside it.
-
-**`app.module.ts` patch** — one import, one array entry, both idempotent
-on `"ScheduleModule"`/`"ScheduleModule.forRoot"`:
+**Dependencies:** `@nestjs/schedule` — `@Cron()`/`@Interval()`/
+`@Timeout()`/`SchedulerRegistry` all ship inside it.
 
 ```typescript
 import { ScheduleModule } from '@nestjs/schedule';
 ```
-
 ```typescript
 ScheduleModule.forRoot(),
 ```
 
-No `.env` changes — nothing about task scheduling is environment-driven
-(no external service to point at, unlike cache/queue's Redis).
-
-**No example `@Cron()` handler.** Consistent with dropping validation's
-DTO and cache's usage example: a cron job only makes sense attached to a
-real piece of business logic, which this tool has no basis to invent.
+No `.env` changes. No example `@Cron()` handler.
 
 ---
 
 ## `ci add queue`
 
-Per [the docs](https://docs.nestjs.com/techniques/queues), which cover
-`@nestjs/bullmq` (BullMQ) — the docs' recommended option over the older
-`@nestjs/bull`/Bull package, and the one that matches `cache`'s
-already-Redis-backed precedent.
+Per [the docs](https://docs.nestjs.com/techniques/queues), covering
+`@nestjs/bullmq` (BullMQ) over the older `@nestjs/bull`.
 
-**Dependencies:** `@nestjs/bullmq`, `bullmq`, `ioredis`. `ioredis` is
-listed explicitly (not left as a transitive dependency of `bullmq`)
-because the module config below constructs an `IORedis` instance
-directly — verified against
-[BullMQ's own connection docs](https://docs.bullmq.io/guide/connections):
-`QueueOptions.connection` accepts only a `{ host, port }` object or an
-actual `ioredis` `Redis` instance, no raw connection-string field.
+**Dependencies:** `@nestjs/bullmq`, `bullmq`, `ioredis` — `ioredis` listed
+explicitly since `QueueOptions.connection` (per
+[BullMQ's own docs](https://docs.bullmq.io/guide/connections)) accepts
+only a `{ host, port }` object or an actual `ioredis` instance, no raw
+connection string.
 
-**`.env.example`/`.env`** — same `REDIS_URL` line `cache` already
-appends, via the same `append_line` idempotency marker (`"REDIS_URL"`),
-so running both `ci add cache` and `ci add queue` doesn't produce two
-`REDIS_URL=` lines.
-
-**`app.module.ts` patch** — two imports, one array entry, idempotent on
-`"BullModule"`/`"BullModule.forRoot"`:
-
-```typescript
-import { BullModule } from '@nestjs/bullmq';
-import IORedis from 'ioredis';
-```
+**`.env.example`/`.env`** — same `REDIS_URL` line `cache` appends, shared
+idempotency marker so running both doesn't duplicate it.
 
 ```typescript
 BullModule.forRoot({
@@ -693,23 +613,19 @@ BullModule.forRoot({
 }),
 ```
 
-`maxRetriesPerRequest: null` is required per BullMQ's docs whenever a
-shared `ioredis` instance is handed to it — Workers open additional
-internal blocking-command connections duplicated from this one, and
-those duplicates need unlimited retries or BullMQ's internal retry logic
-breaks.
-
-**No named-queue registration, no processor/consumer scaffolding.**
-`BullModule.registerQueue({ name: '...' })` and a `WorkerHost` consumer
-are both inherently business-specific — same boundary `schedule` and
-`cache` already draw.
+`maxRetriesPerRequest: null` required per BullMQ's docs whenever a shared
+`ioredis` instance is handed to it. No named-queue registration, no
+processor/consumer scaffolding.
 
 ---
 
 ## `ci add logger`
 
-See the full "shipped in v0.1.2" section above — spec and rationale are
-recorded there in one place rather than duplicated here.
+See the full "shipped in v0.1.2" section above.
+
+## `ci add events`
+
+See the full "shipped in v0.1.2" section above.
 
 ---
 
@@ -717,86 +633,56 @@ recorded there in one place rather than duplicated here.
 
 ```
 src/commands/add/
-  mod.rs             # dispatch: match Command::Validation/Cache/Schedule/Queue/Logger
-  args.rs            # Args { command: Command };
-                       # Command::{Validation, Cache, Schedule, Queue, Logger}
+  mod.rs             # dispatch: match Command::{Validation,Cache,Schedule,Queue,Logger,Events}
+  args.rs            # Args { command: Command }
   listeners.rs        # PrintAction + HistoryAction wiring, identical to init/db's
   patch.rs            # detect_package_manager, install_dependencies,
                        # insert_after, insert_before, insert_after_last_import,
                        # insert_into_array, append_line, write_file_if_absent
   patch/tests.rs
-  validation/
-    mod.rs            # run(): install_dependencies + two main.ts inserts
-    tests.rs
-  cache/
-    mod.rs            # run(): install_dependencies + .env append +
-                       # two app.module.ts inserts
-    tests.rs
-  schedule/
-    mod.rs            # run(): install_dependencies + two app.module.ts
-                       # inserts, no .env change
-    tests.rs
-  queue/
-    mod.rs            # run(): install_dependencies + .env append
-                       # (shares cache's REDIS_URL marker) + two
-                       # app.module.ts inserts
-    tests.rs
-  logger/
-    mod.rs            # run(): write_file_if_absent x2 + two app.module.ts
-                       # inserts + two main.ts inserts, no install
-    tests.rs
+  validation/  { mod.rs, tests.rs }
+  cache/       { mod.rs, tests.rs }
+  schedule/    { mod.rs, tests.rs }
+  queue/       { mod.rs, tests.rs }
+  logger/      { mod.rs, tests.rs }
+  events/      { mod.rs, tests.rs }  # run(): install_dependencies + two
+                                      # app.module.ts inserts, no .env
+                                      # change — same shape as schedule
 
 src/shared/
-  history/
-    mod.rs             # HistoryAction: an Action that appends Finished/
-                        # Error outcomes to <root>/ci/history.jsonl
-    tests.rs
+  history/ { mod.rs, tests.rs }  # HistoryAction: appends Finished/Error
+                                   # outcomes to <root>/ci/history.jsonl
 ```
 
-Template files under `templates/add/` — only `logger/` has any (`logger.
-service.ts`/`logger.module.ts`, loaded via `include_str!` like every
-other `.ts` template in this codebase); the other four subcommands only
-ever patch existing files or shell out.
+Template files under `templates/add/` — only `logger/` has any
+(`logger.service.ts`/`logger.module.ts`, now also reused directly by
+`init`'s own templates — see the note at the top of this document); every
+other subcommand only ever patches existing files or shells out.
 
-Command tags for the event bus (matching `db`'s specific-tag precedent,
-and now also the keys `ci/history.jsonl` records under): `"init"`,
-`"db migrate fresh"` (etc.), `"add validation"`, `"add cache"`,
-`"add schedule"`, `"add queue"`, `"add logger"`.
-
-No `detect.rs` equivalent needed — `add` doesn't branch on ORM, just
-needs `main.ts`/`app.module.ts` to exist (which `patch.rs`'s "not found"
-errors already cover without a separate detection pass).
-`detect_package_manager` is a *different* kind of detection — advisory
-(which installer to shell out to), not something worth failing a whole
-run over, so it falls back to npm instead of erroring.
+Command tags (matching `db`'s specific-tag precedent, and the keys
+`ci/history.jsonl` records under): `"init"`, `"db migrate fresh"` (etc.),
+`"add validation"`, `"add cache"`, `"add schedule"`, `"add queue"`,
+`"add logger"`, `"add events"`.
 
 `src/args/mod.rs` gains `Commands::Add(add::Args)`; `src/commands/mod.rs`
-gains the matching dispatch arm — same two-line addition `db` needed when
-it was wired in.
+gains the matching dispatch arm.
 
 ---
 
 ## Testing
 
 Same `InMemoryFileSystem` + `NoopCommandRunner` + `RecordingUi` pattern
-every other command uses, but tests need to seed the fs with content
-matching what `init` actually generates (not empty files) — `patch.rs`
-operates on *existing* content, so a test with no `main.ts` present is
-testing the "not found" error path, not the real one. Pull the seed
-content from `templates::starter_files(...)`'s own output rather than a
-hand-maintained fixture string that can silently stop matching what
-`init` really produces.
+every other command uses, seeded from real `templates::starter_files(...)`
+output rather than hand-maintained fixtures — this is what kept every
+`add` subcommand's tests green through the Fastify/baked-in-logger
+change without any test needing to change (they read the *current* real
+template each run, not a frozen copy).
 
-Idempotency gets its own test per patch: run a subcommand's `run` twice
-against the same `Context`, assert the second run doesn't duplicate
-anything (and reports "already configured" rather than erroring).
-`write_file_if_absent`-backed subcommands (`logger`) get an extra test:
-hand-edit the generated file between runs, confirm the edit survives.
-
-Multi-subcommand ordering gets its own test wherever two subcommands
-touch the same file: `cache` then `schedule` (or either order) on
-`app.module.ts`; `validation` then `logger` on `main.ts`, asserting the
-full `NestFactory.create` → pipe → `useLogger` → `listen` order.
+Idempotency gets its own test per patch. `write_file_if_absent`-backed
+subcommands (`logger`) get an extra test: hand-edit the generated file
+between runs, confirm the edit survives. Multi-subcommand ordering gets
+its own test wherever two subcommands touch the same file (`cache` then
+`schedule`; `validation` then `logger`; `schedule` then `events`).
 
 `shared::history::tests` covers `HistoryAction` directly against
 `InMemoryFileSystem` — no project-template fixtures needed there, since
@@ -806,69 +692,56 @@ it only cares about `Event`s, not TypeScript content.
 
 ## Suggested build order
 
-1. `patch.rs` — `detect_package_manager`, `install_dependencies`,
-   `insert_after`, `insert_into_array`, each independently unit-testable.
-2. `ci add validation` — the simpler of the first two patches, proves the
-   pattern.
-3. `ci add cache` — the array-insertion case.
-4. Wire `Commands::Add` into `args`/`commands::mod`.
-5. Integration tests seeded from real `templates::starter_files(...)`
-   output, plus the idempotency tests.
-6. `insert_after_last_import` — added once designing `queue` surfaced the
-   fixed-anchor ordering bug; retrofit `cache`'s import insertion onto it
-   at the same time.
-7. `ci add schedule`, then `ci add queue` — reusing `cache`'s `REDIS_URL`
-   marker; BullMQ's `connection: new IORedis(...)` shape confirmed
-   against BullMQ's own docs first.
-8. Integration + idempotency + ordering tests for both.
-9. `ci add logger` — `write_file_if_absent` and `insert_before` added
+1. `patch.rs` core primitives (`detect_package_manager`,
+   `install_dependencies`, `insert_after`, `insert_into_array`), each
+   independently unit-testable.
+2. `ci add validation`, then `ci add cache` — prove the pattern, then the
+   array-insertion case.
+3. Wire `Commands::Add` into `args`/`commands::mod`; integration +
+   idempotency tests.
+4. `insert_after_last_import` — added once designing `queue` surfaced the
+   fixed-anchor ordering bug; retrofit `cache`'s import insertion onto it.
+5. `ci add schedule`, then `ci add queue`.
+6. `ci add logger` — `write_file_if_absent` and `insert_before` added
    alongside it; `validation`'s `main.ts` import insertion retrofitted
-   onto `insert_after_last_import` in the same change, for the same
-   reason `cache`'s was retrofitted in step 6.
-10. `ci/history.jsonl` — `HistoryAction` added to `shared::history`,
-    wired into `add`/`db`/`init`'s `listeners::bus` (each now takes
-    `root`); `init::run` restructured to compute `root` before its event
-    lifecycle starts, so history has somewhere to write even when later
-    steps fail.
+   onto `insert_after_last_import` in the same change.
+7. `ci/history.jsonl` — `HistoryAction` added to `shared::history`, wired
+   into `add`/`db`/`init`'s `listeners::bus` (each now takes `root`);
+   `init::run` restructured to compute `root` before its event lifecycle
+   starts.
+8. *(Independent of this plan)* `init` moved to Fastify and started
+   reusing `templates/add/logger/*` directly — see the note at the top of
+   this document.
+9. `ci add events` — reuses every existing primitive, no new ones;
+   confirmed `eventemitter2` is a real (not peer) dependency of
+   `@nestjs/event-emitter` via `npm view` before writing any code.
 
 ---
 
 ## Explicitly not building yet
 
-- **`--store <name>` to pick a non-Redis cache store.** Redis is the
-  approved default; an in-memory or multi-store option behind a flag is
-  a plausible follow-up, not built now.
+- **`--store <name>` to pick a non-Redis cache store**, **`LOG_LEVEL` env
+  var / non-console loggers**, **`EventEmitterModule.forRoot()` config
+  options (`wildcard`, `delimiter`, ...).** Same reasoning across all
+  three: defaults are sane, no second concrete option exists yet to
+  justify the flag.
 - **An example DTO / cache-usage file / `@Cron()` handler / named-queue
-  registration & consumer scaffolding / example log call.** All planned
-  at some point across every `add` subcommand, all cut before shipping —
-  each is inherently business-specific and this tool has no `generate
-  controller`/`generate service` command yet to attach them to
-  non-arbitrarily. Revisit once one exists.
+  registration & consumer scaffolding / example log call / example
+  emitted event or `@OnEvent()` listener.** All inherently
+  business-specific; this tool has no `generate controller`/`generate
+  service` command yet to attach them to non-arbitrarily.
 - **A `--force` flag to re-patch even when the idempotency marker is
-  found.** "Already configured, did nothing" seems like the right
-  default for re-running an `add` subcommand by habit, not a footgun to
-  design around yet.
-- **`@nestjs/bull` (Bull, not BullMQ).** Went with BullMQ only, matching
-  its status as the actively maintained option.
-- **`NestFactory.create(AppModule, { bufferLogs: true })`.** `ci add
-  logger`'s gap, explained in its section above — needs an "edit an
-  existing line" patch primitive this codebase doesn't have yet (every
-  primitive today only inserts).
-- **`LOG_LEVEL` env var / non-console loggers (Winston, Pino) / per-context
-  log formatting.** `ci add logger`'s default is deliberately just
-  `ConsoleLogger`, unconfigured — same "don't build the flag until
-  there's a second option" reasoning as `--store` above.
+  found.** "Already configured, did nothing" is the right default.
+- **`@nestjs/bull` (Bull, not BullMQ).**
+- **`NestFactory.create(AppModule, { bufferLogs: true })`.** Needs an
+  "edit an existing line" patch primitive this codebase doesn't have yet.
 - **A `ci history` command to view/query `ci/history.jsonl`.** The file
-  itself (newline-delimited JSON, one record per line) is already easy
-  to `cat`/`grep`/pipe into `jq` by hand; a dedicated viewer is a
-  plausible follow-up once someone actually wants filtering/formatting
-  `jq` can't do trivially, not built now.
-- **History retention/rotation/redaction.** The file grows forever and
-  `message` can contain whatever an error's `Display` output happened to
-  include (e.g. a full filesystem path, as seen in the verification run
-  above) — fine for a local per-project log, but worth revisiting if this
-  ever becomes something committed or shared rather than gitignored.
+  itself is already easy to `cat`/`grep`/pipe into `jq` by hand.
+- **History retention/rotation/redaction.** Fine for a local, gitignored,
+  per-project log; worth revisiting if it's ever committed/shared.
+- **Baking `events` into `init` by default**, the way `logger` ended up.
+  A deliberate call, not an oversight — see the note at the top of this
+  document.
 - **More `ci add` subcommands** (swagger, throttling, health checks,
-  ...). The command's *shape* supports growth (one folder per
-  subcommand, same as `db`); only building the five named/settled on so
-  far.
+  ...). The command's *shape* supports growth; only building the six
+  named/settled on so far.

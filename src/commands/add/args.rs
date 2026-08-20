@@ -18,4 +18,6 @@ pub enum Command {
     Queue,
     /// Wire up a standalone LoggerModule (console logger by default)
     Logger,
+    /// Wire up the event emitter (@nestjs/event-emitter)
+    Events,
 }
